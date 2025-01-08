@@ -1,0 +1,57 @@
+{
+    "name": "loreline",
+    "displayName": "Loreline",
+    "description": "Syntax highlighting for Loreline interactive fiction scripts",
+    "version": "0.1.0",
+	"publisher": "jeremyfa",
+    "author": {
+        "name": "Jérémy Faivre"
+    },
+    "engines": {
+        "vscode": "^1.74.0"
+    },
+    "categories": [
+        "Programming Languages"
+    ],
+    "license": "MIT",
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/jeremyfa/vscode-loreline"
+    },
+    "bugs": {
+        "url": "https://github.com/jeremyfa/vscode-loreline/issues"
+    },
+    "homepage": "https://github.com/jeremyfa/vscode-loreline",
+    "contributes": {
+        "languages": [
+            {
+                "id": "loreline",
+                "aliases": [
+                    "Loreline",
+                    "loreline"
+                ],
+                "extensions": [
+                    ".lor"
+                ],
+                "configuration": "./language-configuration.json"
+            }
+        ],
+        "grammars": [
+            {
+                "language": "loreline",
+                "scopeName": "source.loreline",
+                "path": "./syntaxes/loreline.tmLanguage.json"
+            },
+            {
+                "scopeName": "markdown.loreline.codeblock",
+                "path": "./syntaxes/loreline-markdown-injection.json",
+                "injectTo": [
+                    "text.html.markdown"
+                ],
+                "embeddedLanguages": {
+                    "meta.embedded.block.loreline": "loreline"
+                }
+            }
+        ]
+    }
+}
