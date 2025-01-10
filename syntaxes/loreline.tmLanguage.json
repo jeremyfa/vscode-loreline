@@ -73,10 +73,24 @@
         "character-block": {
             "patterns": [
                 {
-                    "begin": "\\b(character)\\b",
+                    "begin": "((?:\\s*/\\*[^*]*\\*+(?:[^/*][^*]*\\*+)*/)*\\s*)\\b(character)\\b((?:\\s*/\\*[^*]*\\*+(?:[^/*][^*]*\\*+)*/)*\\s*)",
                     "beginCaptures": {
                         "1": {
+                            "patterns": [
+                                {
+                                    "include": "#comments"
+                                }
+                            ]
+                        },
+                        "2": {
                             "name": "keyword.control.character.loreline"
+                        },
+                        "3": {
+                            "patterns": [
+                                {
+                                    "include": "#comments"
+                                }
+                            ]
                         }
                     },
                     "end": "(?<=\\})",
