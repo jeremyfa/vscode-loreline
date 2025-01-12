@@ -6,6 +6,18 @@
             "include": "#comments"
         },
         {
+            "include": "#indent-beat-block"
+        },
+        {
+            "include": "#indent-character-block"
+        },
+        {
+            "include": "#indent-state-block"
+        },
+        {
+            "include": "#indent-choice-block"
+        },
+        {
             "include": "#beat-block"
         },
         {
@@ -52,6 +64,155 @@
         }
     ],
     "repository": {
+        "indent-beat-block": {
+            "patterns": [
+                {
+                    "begin": "((?:\\s*/\\*[^*]*\\*+(?:[^/*][^*]*\\*+)*/)*\\s*)(\\b(beat)\\b)\\s+([\\w\\d_]+)\\s*$",
+                    "beginCaptures": {
+                        "1": {
+                            "patterns": [{"include": "#comments"}]
+                        },
+                        "3": {
+                            "name": "keyword.control.beat.loreline"
+                        },
+                        "4": {
+                            "name": "entity.name.type.beat.loreline"
+                        }
+                    },
+                    "end": "^(?!\\1)|^(?=\\s*(?:beat|state|character)\\b)",
+                    "patterns": [
+                        {
+                            "include": "#comments"
+                        },
+                        {
+                            "include": "#braces-in-beat"
+                        },
+                        {
+                            "include": "#indents-in-beat"
+                        },
+                        {
+                            "include": "#beat-patterns"
+                        }
+                    ]
+                }
+            ]
+        },
+        "indent-character-block": {
+            "patterns": [
+                {
+                    "begin": "((?:\\s*/\\*[^*]*\\*+(?:[^/*][^*]*\\*+)*/)*\\s*)(\\b(character)\\b)\\s+([\\w\\d_]+)\\s*$",
+                    "beginCaptures": {
+                        "1": {
+                            "patterns": [{"include": "#comments"}]
+                        },
+                        "3": {
+                            "name": "keyword.control.character.loreline"
+                        },
+                        "4": {
+                            "name": "entity.name.class.loreline"
+                        }
+                    },
+                    "end": "^(?!\\1)|^(?=\\s*(?:beat|state|character)\\b)",
+                    "patterns": [
+                        {
+                            "include": "#comments"
+                        },
+                        {
+                            "include": "#keyval-patterns"
+                        }
+                    ]
+                }
+            ]
+        },
+        "indent-state-block": {
+            "patterns": [
+                {
+                    "begin": "((?:\\s*/\\*[^*]*\\*+(?:[^/*][^*]*\\*+)*/)*\\s*)(\\b(state)\\b)\\s*$",
+                    "beginCaptures": {
+                        "1": {
+                            "patterns": [{"include": "#comments"}]
+                        },
+                        "3": {
+                            "name": "keyword.control.state.loreline"
+                        }
+                    },
+                    "end": "^(?!\\1)|^(?=\\s*(?:beat|state|character)\\b)",
+                    "patterns": [
+                        {
+                            "include": "#comments"
+                        },
+                        {
+                            "include": "#keyval-patterns"
+                        }
+                    ]
+                }
+            ]
+        },
+        "indent-choice-block": {
+            "patterns": [
+                {
+                    "include": "#unquoted-strings"
+                },
+                {
+                    "begin": "^\\s*(choice)\\s*$",
+                    "beginCaptures": {
+                        "1": {
+                            "name": "keyword.control.choice.loreline"
+                        }
+                    },
+                    "end": "^(?!\\1)",
+                    "patterns": [
+                        {
+                            "include": "#comments"
+                        },
+                        {
+                            "include": "#indents-in-choice"
+                        },
+                        {
+                            "include": "#keywords"
+                        },
+                        {
+                            "include": "#transitions"
+                        },
+                        {
+                            "include": "#functions"
+                        },
+                        {
+                            "include": "#operators"
+                        },
+                        {
+                            "include": "#constants"
+                        },
+                        {
+                            "include": "#variables"
+                        }
+                    ]
+                }
+            ]
+        },
+        "indent-if-block2": {
+            "patterns": [
+                {
+                    "begin": "^\\s*(if)\\s*\\(([^)]+)\\)\\s*$",
+                    "beginCaptures": {
+                        "1": {
+                            "name": "keyword.control.loreline"
+                        },
+                        "2": {
+                            "patterns": [
+                                {"include": "#expressions"}
+                            ]
+                        }
+                    },
+                    "end": "^(?!\\1)",
+                    "patterns": [
+                        {
+                            "include": "#beat-patterns"
+                        }
+                    ]
+                }
+            ]
+        },
         "comments": {
             "patterns": [
                 {
@@ -326,6 +487,9 @@
                             "include": "#braces-in-beat"
                         },
                         {
+                            "include": "#indents-in-beat"
+                        },
+                        {
                             "match": "(\\b[\\w\\d_]+\\b)",
                             "name": "entity.name.type.beat.loreline"
                         }
@@ -360,7 +524,32 @@
                     "include": "#braces-in-beat"
                 },
                 {
+                    "include": "#indents-in-beat"
+                },
+                {
                     "include": "#beat-patterns"
+                }
+            ]
+        },
+        "indents-in-beat": {
+            "patterns": [
+                {
+                    "include": "#beat-block"
+                },
+                {
+                    "include": "#state-block"
+                },
+                {
+                    "include": "#choice-block"
+                },
+                {
+                    "include": "#indent-beat-block"
+                },
+                {
+                    "include": "#indent-state-block"
+                },
+                {
+                    "include": "#indent-choice-block"
                 }
             ]
         },
@@ -464,6 +653,50 @@
                     "include": "#braces-in-beat"
                 },
                 {
+                    "include": "#indents-in-beat"
+                },
+                {
+                    "include": "#unquoted-strings"
+                },
+                {
+                    "include": "#transitions"
+                },
+                {
+                    "include": "#operators"
+                },
+                {
+                    "include": "#keywords-in-choice"
+                },
+                {
+                    "include": "#functions-in-choice"
+                },
+                {
+                    "include": "#constants"
+                },
+                {
+                    "include": "#variables"
+                }
+            ]
+        },
+        "indents-in-choice": {
+            "name": "meta.block.indented",
+            "begin": "^(\\s*)(\\S.*?)$\\s*(?=\\n\\1\\s+\\S)",
+            "beginCaptures": {
+              "1": { "name": "meta.indent-level" },
+              "2": { "name": "meta.block.header" }
+            },
+            "end": "^(?!\\1\\s+\\S|\\s*$)",
+            "patterns": [
+                {
+                    "include": "#comments"
+                },
+                {
+                    "include": "#braces-in-beat"
+                },
+                {
+                    "include": "#indents-in-beat"
+                },
+                {
                     "include": "#unquoted-choice-strings"
                 },
                 {
@@ -490,7 +723,7 @@
             "patterns": [
                 {
                     "name": "keyword.control.loreline",
-                    "match": "\\b(if|else|new)\\b"
+                    "match": "\\b(if|else|new|and|or)\\b"
                 }
             ]
         },
@@ -586,11 +819,11 @@
         "unquoted-strings": {
             "patterns": [
                 {
-                    "begin": "^(?!\\s*->)(?!\\s*(?:state|beat|character|choice|else|new)\\b)(?!\\s*if\\s*(?:/\\*[^*]*\\*/\\s*)*\\()(?!\\s*[\\w\\d_]+\\s*:)(?!\\s*:)(?!\\s*})(?!\\s*])(?!\\s*\\[)(?!\\s*\\{)(?!\\s*(?:\\/\\*[^*]*\\*\\/\\s*)*[\\w\\d_]+(?:\\s*\\.\\s*[\\w\\d_]+)*(?:\\s*\\[.*\\])*\\s*\\()((?:\\/\\*[^*]*\\*\\/\\s*)*)(?=.*[^\\s\"+=\\-*/(){}\\[\\]:\\n\\r])(\\s*)",
+                    "begin": "^(?!\\s*(?:/\\*[^*]*\\*\\/\\s*)*if\\b\\s*(?:/\\*[^*]*\\*\\/\\s*)*(?:(?:!)?[\\w\\d_]+(?:\\s*\\.\\s*[\\w\\d_]+)*(?:\\s*\\[.*?\\])*\\s*(?:(?:and|or|&&|\\|\\||==|>=|<=|>|<|\\+(?!=)|-(?!=)|\\*(?!=)|/(?!=))|\\(|{|->|$)|\\())(?!\\s*->)(?!\\s*(?:state|beat|character|choice|else|new)\\b)(?!\\s*[\\w\\d_]+\\s*:)(?!\\s*:)(?!\\s*})(?!\\s*])(?!\\s*\\[)(?!\\s*\\{)(?!\\s*(?:\\/\\*[^*]*\\*\\/\\s*)*[\\w\\d_]+(?:\\s*\\.\\s*[\\w\\d_]+)*(?:\\s*\\[.*\\])*\\s*(?:\\(|=(?!=)|\\+=|-=|\\*=|/=))((?:\\/\\*[^*]*\\*\\/\\s*)*)(?=.*[^\\s\"+=\\-*/(){}\\[\\]:\\n\\r])(\\s*)",
                     "beginCaptures": {
                         "2": {}
                     },
-                    "end": "$|(?=[{\\n]|->\\s*([a-zA-Z_][a-zA-Z0-9_]*)\\s*$)|(?=(?<=[^\\s/]\\s*)(//|/\\*))",
+                    "end": "$|(?=[{\\n])|(?=\\s*if\\b\\s*(?:/\\*[^*]*\\*\\/\\s*)*(?:(?:!)?[\\w\\d_]+(?:\\s*\\.\\s*[\\w\\d_]+)*(?:\\s*\\[.*?\\])*\\s*(?:(?:and|or|&&|\\|\\||==|>=|<=|>|<|\\+(?!=)|-(?!=)|\\*(?!=)|/(?!=))|\\(|{|->|$)))|(?<=\\S)(?=\\s*\\bif\\s*(?:/\\*[^*]*\\*\\/\\s*)*\\()|(?<=\\S)(?=\\s*\\bif\\b\\s*(?:\\/\\*[^*]*\\*\\/\\s*)*[\\w\\d_]+(?:\\s*\\.\\s*[\\w\\d_]+)*(?:\\s*\\[.*\\])*\\s*(?:\\(|==|>=|<=|>|<|\\+(?!=)|-(?!=)|\\*(?!=)|/(?!=)))|(?=->(?:\\s*(?:/\\*[^*]*\\*/\\s*)*)(?:[a-zA-Z_][a-zA-Z0-9_]*)(?:\\s*(?:/\\*[^*]*\\*/\\s*)*)(?:$|\\n|\\r))|(?<=\\S)(?=\\s*\\bif\\b\\s*(?:\\/\\*[^*]*\\*\\/\\s*)*(?:!)?[\\w\\d_]+(?:\\s*\\.\\s*[\\w\\d_]+)*(?:\\s*\\[.*\\])*\\s*(?:{|/|->|$))|(?=(?<=[^\\s/]\\s*)(//|/\\*))",
                     "patterns": [
                         {
                             "include": "#comments"
@@ -608,36 +841,6 @@
                         {
                             "match": ".",
                             "name": "string.unquoted.loreline"
-                        }
-                    ]
-                }
-            ]
-        },
-        "unquoted-choice-strings": {
-            "patterns": [
-                {
-                    "begin": "^(?!\\s*->)(?!\\s*(?:state|beat|character|choice|else|new)\\b)(?!\\s*[\\w\\d_]+\\s*:)(?!\\s*:)(?!\\s*})(?!\\s*])(?!\\s*\\[)(?!\\s*\\{)((?:\\/\\*[^*]*\\*\\/\\s*)*)(?=.*[^\\s\"+=\\-*/(){}\\[\\]:\\n\\r])(\\s*)",
-                    "beginCaptures": {
-                        "2": {}
-                    },
-                    "end": "$|(?=[{\\n])|(?<=\\S)(?=\\s*\\bif\\s*(?:/\\*[^*]*\\*\\/\\s*)*\\()|(?=->\\s*([a-zA-Z_][a-zA-Z0-9_]*)\\s*$)|(?=(?<=[^\\s/]\\s*)(//|/\\*))",
-                    "patterns": [
-                        {
-                            "include": "#comments"
-                        },
-                        {
-                            "name": "constant.character.escape.loreline",
-                            "match": "\\\\."
-                        },
-                        {
-                            "include": "#string-tags"
-                        },
-                        {
-                            "include": "#string-interpolation"
-                        },
-                        {
-                            "match": ".",
-                            "name": "string.unquoted.choice.loreline"
                         }
                     ]
                 }
@@ -662,7 +865,7 @@
                             ]
                         }
                     },
-                    "end": "$|(?=[{\\n]|->\\s*([a-zA-Z_][a-zA-Z0-9_]*)\\s*$)|(?=(?<=[^\\s/]\\s*)(//|/\\*))",
+                    "end": "$|(?=[{\\n])|(?<=\\S)(?=\\s*\\bif\\s*(?:/\\*[^*]*\\*\\/\\s*)*\\()|(?<=\\S)(?=\\s*\\bif\\b\\s*(?:\\/\\*[^*]*\\*\\/\\s*)*[\\w\\d_]+(?:\\s*\\.\\s*[\\w\\d_]+)*(?:\\s*\\[.*\\])*\\s*(?:\\(|==|>=|<=|>|<|\\+(?!=)|-(?!=)|\\*(?!=)|/(?!=)))|(?=->(?:\\s*(?:/\\*[^*]*\\*/\\s*)*)(?:[a-zA-Z_][a-zA-Z0-9_]*)(?:\\s*(?:/\\*[^*]*\\*/\\s*)*)(?:$|\\n|\\r))|(?<=\\S)(?=\\s*\\bif\\b\\s*(?:\\/\\*[^*]*\\*\\/\\s*)*(?:!)?[\\w\\d_]+(?:\\s*\\.\\s*[\\w\\d_]+)*(?:\\s*\\[.*\\])*\\s*(?:{|/|->|$))|(?=(?<=[^\\s/]\\s*)(//|/\\*))",
                     "patterns": [
                         {
                             "name": "constant.character.escape.loreline",
@@ -895,7 +1098,7 @@
             "patterns": [
                 {
                     "name": "assignment.scope",
-                    "begin": "^(?=[^<>\\(\\)]+?\\s*[+\\-*/%]?=\\s*)",
+                    "begin": "^(?=[^<>\\(\\)]+?\\s*(\\+=|-=|\\*=|/=|=)\\s*)(?![^<>\\(\\)]+?\\s*(==)\\s*)",
                     "end": "$",
                     "patterns": [
                         {
