@@ -1,1 +1,7 @@
+/vscode-loreline.js
+/vscode-loreline.js.map
+/.haxelib
+/.vscode/.BROWSE.VC.DB
 .DS_Store
+.vsixmanifest
+/node_modules

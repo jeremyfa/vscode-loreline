@@ -23,7 +23,20 @@
         ["\"", "\""]
     ],
     "indentationRules": {
-        "increaseIndentPattern": "^.*\\{[^}]*$",
-        "decreaseIndentPattern": "^\\s*\\}"
+        "increaseIndentPattern": "^(?:\\s*(?:/\\*[^*]*\\*+(?:[^/*][^*]*\\*+)*/\\s*)*)(beat|choice|if|else\\s+if|else|state|character\\s+(?:/\\*[^*]*\\*+(?:[^/*][^*]*\\*+)*/\\s*)*[\\w\\d_]+)\\b.*(?:/[/*].*)?$|^.*\\{\\s*$",
+        "decreaseIndentPattern": "^\\s*}\\s*$|^\\s*(else\\s+if|else)\\b"
+    },
+    "onEnterRules": [
+        {
+            "beforeText": "^(?:\\s*(?:/\\*[^*]*\\*+(?:[^/*][^*]*\\*+)*/\\s*)*)(beat|choice|if|else\\s+if|else|state|character\\s+(?:/\\*[^*]*\\*+(?:[^/*][^*]*\\*+)*/\\s*)*[\\w\\d_]+)\\b.*(?:/[/*].*)?$",
+            "action": { "indent": "indent" }
+        }
+    ],
+    "folding": {
+        "offSide": true,
+        "markers": {
+            "start": "^\\s*\\b(beat|state|character|choice)\\b",
+            "end": "^\\s*$\\n(?!\\s+\\S)"
+        }
     }
 }

@@ -1,0 +1,12 @@
+{
+    "window.title": "${activeEditorShort} — vscode-loreline",
+    "search.exclude": {
+        "**/.git": true,
+        "**/node_modules": true,
+        "**/tmp": true,
+        "writing/**": true
+    },
+    "haxe.configurations": [
+        ["build.hxml", "-D", "completion"],
+    ]
+}

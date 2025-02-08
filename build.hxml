@@ -1,0 +1,25 @@
+-cp src
+-lib vscode
+-lib tracker
+-lib hxnodejs
+-lib loreline
+-js vscode-loreline.js
+-D js-source-map
+VscodeLoreline
+
+--next
+
+-cp src
+-lib vscode
+-lib tracker
+-lib hxnodejs
+-lib loreline
+-js loreline-server.js
+-D js-source-map
+--main LorelineServer
+
+--next
+
+-cp src
+--main PatchOutput
+--interp

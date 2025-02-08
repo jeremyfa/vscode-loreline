@@ -1,0 +1,40 @@
+{
+    "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+    "name": "Loreline Expression",
+    "scopeName": "source.loreline.expression",
+    "patterns": [
+        {
+            "include": "#expressions"
+        }
+    ],
+    "repository": {
+        "expressions": {
+            "patterns": [
+                {
+                    "include": "source.loreline#comments"
+                },
+                {
+                    "include": "source.loreline#transitions"
+                },
+                {
+                    "include": "source.loreline#operators"
+                },
+                {
+                    "include": "source.loreline#keywords"
+                },
+                {
+                    "include": "source.loreline#functions-in-beat"
+                },
+                {
+                    "include": "source.loreline#constants"
+                },
+                {
+                    "include": "source.loreline#variables"
+                },
+                {
+                    "include": "source.loreline#quoted-strings"
+                }
+            ]
+        }
+    }
+}
