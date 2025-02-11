@@ -406,7 +406,7 @@ loreline_lsp_Server.prototype = {
 						while(_g < _g1.length) {
 							var field = _g1[_g];
 							++_g;
-							items.push({ label : field.name, kind : 10, detail : "Character property", insertText : field.name, insertTextMode : 1, insertTextFormat : 1});
+							items.push({ label : field.name, kind : 10, detail : "Character property", insertText : field.name, insertTextMode : 1, insertTextFormat : 1, documentation : this.documentationForNode(field)});
 						}
 						return items;
 					case loreline_NLiteral:
@@ -429,7 +429,7 @@ loreline_lsp_Server.prototype = {
 							while(_g < fields.length) {
 								var field = fields[_g];
 								++_g;
-								items.push({ label : field.name, kind : 5, detail : "Object field", insertText : field.name, insertTextMode : 1, insertTextFormat : 1});
+								items.push({ label : field.name, kind : 5, detail : "Object field", insertText : field.name, insertTextMode : 1, insertTextFormat : 1, documentation : this.documentationForNode(field)});
 							}
 							return items;
 						}
@@ -458,21 +458,21 @@ loreline_lsp_Server.prototype = {
 			while(_g < _g1.length) {
 				var character = _g1[_g];
 				++_g;
-				items.push({ label : character.name, kind : 22, detail : "Character", insertText : character.name, insertTextMode : 1, insertTextFormat : 1});
+				items.push({ label : character.name, kind : 22, detail : "Character", insertText : character.name, insertTextMode : 1, insertTextFormat : 1, documentation : this.documentationForNode(character)});
 			}
 			var _g = 0;
 			var _g1 = lens.getVisibleStateFields(node);
 			while(_g < _g1.length) {
 				var field = _g1[_g];
 				++_g;
-				items.push({ label : field.name, kind : 6, detail : "State field", insertText : field.name, insertTextMode : 1, insertTextFormat : 1});
+				items.push({ label : field.name, kind : 6, detail : "State field", insertText : field.name, insertTextMode : 1, insertTextFormat : 1, documentation : this.documentationForNode(field)});
 			}
 			var _g = 0;
 			var _g1 = lens.getVisibleBeats(node);
 			while(_g < _g1.length) {
 				var beat = _g1[_g];
 				++_g;
-				items.push({ label : beat.name, kind : 7, detail : "Beat", insertText : beat.name, insertTextMode : 1, insertTextFormat : 1});
+				items.push({ label : beat.name, kind : 7, detail : "Beat", insertText : beat.name, insertTextMode : 1, insertTextFormat : 1, documentation : this.documentationForNode(beat)});
 			}
 			return items;
 		}
@@ -485,14 +485,14 @@ loreline_lsp_Server.prototype = {
 		while(_g < _g1.length) {
 			var field = _g1[_g];
 			++_g;
-			items.push({ label : field.name, kind : 6, detail : "State field"});
+			items.push({ label : field.name, kind : 6, detail : "State field", documentation : this.documentationForNode(field)});
 		}
 		var _g = 0;
 		var _g1 = lens.getVisibleCharacters();
 		while(_g < _g1.length) {
 			var character = _g1[_g];
 			++_g;
-			items.push({ label : character.name, kind : 7, detail : "Character"});
+			items.push({ label : character.name, kind : 7, detail : "Character", documentation : this.documentationForNode(character)});
 		}
 		return items;
 	}
@@ -504,18 +504,20 @@ loreline_lsp_Server.prototype = {
 			var beat = _g1[_g];
 			++_g;
 			var tmp = insert;
-			items.push({ label : beat.name, kind : 7, detail : "Beat", insertText : (tmp != null ? tmp : "") + beat.name, insertTextMode : 1, insertTextFormat : 1});
+			items.push({ label : beat.name, kind : 7, detail : "Beat", insertText : (tmp != null ? tmp : "") + beat.name, insertTextMode : 1, insertTextFormat : 1, documentation : this.documentationForNode(beat)});
 		}
 		return items;
 	}
 	,getTagCompletions: function(lens) {
 		var items = [];
+		var counts = lens.countTags();
 		var _g = 0;
 		var _g1 = lens.getAllTags();
 		while(_g < _g1.length) {
 			var tag = _g1[_g];
 			++_g;
-			items.push({ label : tag, kind : 13, detail : "Tag"});
+			var uses = counts.h[tag];
+			items.push({ label : tag, kind : 13, detail : "Tag", documentation : "Used " + uses + " time" + (uses == 1 ? "" : "s")});
 		}
 		return items;
 	}
@@ -562,7 +564,7 @@ loreline_lsp_Server.prototype = {
 					} else {
 						peekNode = resolved;
 					}
-					result.push({ targetUri : uri, targetRange : this.rangeFromLorelinePosition(peekNode.pos,content), targetSelectionRange : this.rangeFromLorelinePosition(resolved.pos,content), originSelectionRange : this.rangeFromLorelinePosition(access.pos,content)});
+					result.push({ targetUri : uri, targetRange : this.rangeFromLorelinePosition(peekNode.pos,content), targetSelectionRange : this.firstLineRange(this.rangeFromLorelinePosition(resolved.pos,content),content), originSelectionRange : this.rangeFromLorelinePosition(access.pos,content)});
 				}
 				break;
 			case loreline_NArrayAccess:
@@ -577,7 +579,7 @@ loreline_lsp_Server.prototype = {
 					} else {
 						peekNode = resolved;
 					}
-					result.push({ targetUri : uri, targetRange : this.rangeFromLorelinePosition(peekNode.pos,content), targetSelectionRange : this.rangeFromLorelinePosition(resolved.pos,content), originSelectionRange : this.rangeFromLorelinePosition(access.pos,content)});
+					result.push({ targetUri : uri, targetRange : this.rangeFromLorelinePosition(peekNode.pos,content), targetSelectionRange : this.firstLineRange(this.rangeFromLorelinePosition(resolved.pos,content),content), originSelectionRange : this.rangeFromLorelinePosition(access.pos,content)});
 				}
 				break;
 			case loreline_NDialogueStatement:
@@ -634,7 +636,7 @@ loreline_lsp_Server.prototype = {
 		return null;
 	}
 	,makeNodeHover: function(lens,uri,content,node) {
-		this.onLog(JSON.stringify(node.pos.toJson()),{ fileName : "loreline/lsp/Server.hx", lineNumber : 912, className : "loreline.lsp.Server", methodName : "makeNodeHover"});
+		this.onLog(JSON.stringify(node.pos.toJson()),{ fileName : "loreline/lsp/Server.hx", lineNumber : 923, className : "loreline.lsp.Server", methodName : "makeNodeHover"});
 		switch(js_Boot.getClass(node)) {
 		case loreline_NAccess:
 			var access = node;
@@ -842,6 +844,33 @@ loreline_lsp_Server.prototype = {
 			title += " (" + origin + ")";
 		}
 		return title;
+	}
+	,documentationForNode: function(node) {
+		var description = [];
+		if(node.leadingComments != null) {
+			var _g = 0;
+			var _g1 = node.leadingComments;
+			while(_g < _g1.length) {
+				var comment = _g1[_g];
+				++_g;
+				description.push(StringTools.trim(comment.content));
+			}
+		}
+		if(node.trailingComments != null) {
+			if(description.length > 0) {
+				description.push("");
+				description.push("---");
+				description.push("");
+			}
+			var _g = 0;
+			var _g1 = node.trailingComments;
+			while(_g < _g1.length) {
+				var comment = _g1[_g];
+				++_g;
+				description.push(StringTools.trim(comment.content));
+			}
+		}
+		return { kind : "markdown", value : description.join("\n")};
 	}
 	,hoverDescriptionForNode: function(node) {
 		var description = [];
@@ -2476,6 +2505,11 @@ loreline_Lens.prototype = {
 				processStringLiteral(node);
 			}
 		});
+		this.script.each(function(node,parent) {
+			if(js_Boot.getClass(node) == loreline_NStringLiteral) {
+				processStringLiteral(node);
+			}
+		});
 		var _g = [];
 		var h = tags_h;
 		var tag_h = h;
@@ -2487,6 +2521,38 @@ loreline_Lens.prototype = {
 			_g.push(tag);
 		}
 		return _g;
+	}
+	,countTags: function() {
+		var tags = new haxe_ds_StringMap();
+		var processStringLiteral = function(str) {
+			var _g = 0;
+			var _g1 = str.parts;
+			while(_g < _g1.length) {
+				var part = _g1[_g];
+				++_g;
+				var _g2 = part.type;
+				if(_g2._hx_index == 2) {
+					var _g3 = _g2.closing;
+					var content = _g2.expr;
+					if(content.parts.length == 1) {
+						var _g4 = content.parts[0].type;
+						if(_g4._hx_index == 0) {
+							var text = _g4.text;
+							text = StringTools.trim(text);
+							var tmp = tags.h[text];
+							var prevCount = tmp != null ? tmp : 0;
+							tags.h[text] = prevCount + 1;
+						}
+					}
+				}
+			}
+		};
+		this.script.each(function(node,parent) {
+			if(js_Boot.getClass(node) == loreline_NStringLiteral) {
+				processStringLiteral(node);
+			}
+		});
+		return tags;
 	}
 	,findStateField: function(access) {
 		if(access.target != null) {
@@ -5432,6 +5498,49 @@ loreline_Lexer.prototype = {
 		pos = startPos;
 		return true;
 	}
+	,isLabelStart: function(pos) {
+		pos = this.skipWhitespaceAndComments(pos);
+		var c = HxOverrides.cca(this.input,pos);
+		if(!(c >= 97 && c <= 122 || c >= 65 && c <= 90 || c == 95)) {
+			return false;
+		}
+		var startPos = pos;
+		++pos;
+		while(true) {
+			var tmp;
+			if(pos < this.length) {
+				var c = HxOverrides.cca(this.input,pos);
+				tmp = c >= 97 && c <= 122 || c >= 65 && c <= 90 || c == 95 || c >= 48 && c <= 57;
+			} else {
+				tmp = false;
+			}
+			if(!tmp) {
+				break;
+			}
+			++pos;
+		}
+		while(true) {
+			var tmp;
+			if(pos < this.length) {
+				var c = HxOverrides.cca(this.input,pos);
+				tmp = c == 32 || c == 9;
+			} else {
+				tmp = false;
+			}
+			if(!tmp) {
+				break;
+			}
+			++pos;
+		}
+		if(pos >= this.length || HxOverrides.cca(this.input,pos) != 58) {
+			return false;
+		}
+		var word = HxOverrides.substr(this.input,startPos,pos - startPos);
+		if(Object.prototype.hasOwnProperty.call(loreline_Lexer.KEYWORDS.h,word)) {
+			return false;
+		}
+		return true;
+	}
 	,isCallStart: function(pos) {
 		var _gthis = this;
 		var startPos = pos;
@@ -5864,7 +5973,7 @@ loreline_Lexer.prototype = {
 		var isAssignValue = this.followsAssignStart();
 		var isValue = parent == loreline_TokenType.KwState || parent == loreline_TokenType.KwCharacter || inBrackets || isAssignValue;
 		if(isValue) {
-			if(this.isCallStart(this.pos)) {
+			if(this.isCallStart(this.pos) || this.isLabelStart(this.pos)) {
 				return null;
 			}
 		} else if(this.isIdentifierExpressionStart(this.pos) || this.isIfStart(this.pos) || this.isCallStart(this.pos) || this.isAssignStart(this.pos)) {
@@ -5890,10 +5999,10 @@ loreline_Lexer.prototype = {
 		var isDialogue = false;
 		if(isValue) {
 			if(inBrackets) {
-				if(!this.followsOnlyWhitespacesOrCommentsInLine() && !this.isAfterComma() && !this.isAfterLBracket()) {
+				if(!this.followsOnlyWhitespacesOrCommentsInLine() && !this.isAfterComma() && !this.isAfterLBracket() && !this.isAfterLabel()) {
 					return null;
 				}
-			} else if(!isAssignValue && !this.isAfterLabel() && !this.isAfterComma()) {
+			} else if(!isAssignValue && !this.isAfterLabel()) {
 				return null;
 			}
 		} else {
@@ -7880,16 +7989,26 @@ var loreline_Parser = function(tokens) {
 loreline_Parser.__name__ = "loreline.Parser";
 loreline_Parser.prototype = {
 	peek: function() {
-		if(this.current + 1 >= this.tokens.length) {
-			return this.tokens[this.tokens.length - 1];
+		var i = this.current + 1;
+		while(i < this.tokens.length) {
+			var _g = this.tokens[i].type;
+			switch(_g._hx_index) {
+			case 42:
+				var _g1 = _g.content;
+				++i;
+				break;
+			case 43:
+				var _g2 = _g.content;
+				++i;
+				break;
+			case 46:
+				++i;
+				break;
+			default:
+				return this.tokens[i];
+			}
 		}
-		return this.tokens[this.current + 1];
-	}
-	,peekNext: function() {
-		return this.tokens[this.current + 2];
-	}
-	,peekType: function() {
-		return this.peek().type;
+		return this.tokens[this.tokens.length - 1];
 	}
 	,advance: function() {
 		var prev = this.tokens[this.current];
@@ -8097,6 +8216,9 @@ loreline_Parser.prototype = {
 		var _gthis = this;
 		while(this.isComment(this.tokens[this.current].type) || this.tokens[this.current].type == loreline_TokenType.LineBreak) {
 			if(this.isComment(this.tokens[this.current].type)) {
+				if(this.pendingComments == null) {
+					this.pendingComments = [];
+				}
 				var tmp = this.pendingComments;
 				var tmp1 = this.nextNodeId++;
 				var tmp2 = this.currentPos();
@@ -8716,8 +8838,14 @@ loreline_Parser.prototype = {
 			return this.attachComments(new loreline_NLiteral(this.nextNodeId++,startPos,null,loreline_LiteralType.Null));
 		case 12:
 			var name = _g.name;
-			this.advance();
-			return this.parseIdentifierExpression(startPos,name);
+			if(this.peek().type == loreline_TokenType.Colon) {
+				var fields = [this.parseObjectField()];
+				return new loreline_NLiteral(this.nextNodeId++,startPos.extendedTo(this.prevNonWhitespaceOrComment().pos),fields,loreline_LiteralType.Object(0));
+			} else {
+				this.advance();
+				return this.parseIdentifierExpression(startPos,name);
+			}
+			break;
 		case 36:
 			return this.parseObjectLiteral();
 		case 38:
