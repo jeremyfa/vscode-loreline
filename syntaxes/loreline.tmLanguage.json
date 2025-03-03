@@ -327,6 +327,12 @@
                     "include": "#comments"
                 },
                 {
+                    "include": "#indent-function-block"
+                },
+                {
+                    "include": "#function-block"
+                },
+                {
                     "include": "#array-values"
                 },
                 {
@@ -383,7 +389,7 @@
         "unquoted-string-values-in-multiline-array": {
             "patterns": [
                 {
-                    "begin": "(?!,?\\s*(?:/\\*[^*]*\\*\\/\\s*)*[a-zA-Z_][a-zA-Z0-9_]*\\s*:\\s*)(?:^\\s*(?:/\\*[^*]*\\*+(?:[^/*][^*]*\\*+)*/\\s*)*|(?<=:|,|\\[|(?::\\s*(?:/\\*[^*]*\\*+(?:[^/*][^*]*\\*+)*/\\s*)*)))\\s*((?:\\/\\*[^*]*\\*\\/\\s*)*)((?!\\s*(?:(?:true|false|null)\\b(?!\\s*[^\\s\"+=\\-*/(){}\\[\\]:\\n\\r,])|\\d+(?:\\.\\d+)?\\b(?!\\s*[^\\s\"+=\\-*/(){}\\[\\]:\\n\\r,])))(?=.*[^\\s\"+=\\-*/(){}\\[\\]:\\n\\r])(?!\\s*(?:(?:[a-zA-Z_][a-zA-Z0-9_]*(?:\\s*\\.\\s*[a-zA-Z_][a-zA-Z0-9_]*)*\\s*(?:\\(|\\[))|(\\[|\\{|,)|(?:\"))))",
+                    "begin": "(?!,?\\s*(?:/\\*[^*]*\\*\\/\\s*)*[a-zA-Z_][a-zA-Z0-9_]*\\s*:\\s*)(?:^\\s*(?:/\\*[^*]*\\*+(?:[^/*][^*]*\\*+)*/\\s*)*|(?<=:|,|\\[|(?::\\s*(?:/\\*[^*]*\\*+(?:[^/*][^*]*\\*+)*/\\s*)*)))\\s*((?:\\/\\*[^*]*\\*\\/\\s*)*)(?!\\s*(?:function)\\b)((?!\\s*(?:(?:true|false|null)\\b(?!\\s*[^\\s\"+=\\-*/(){}\\[\\]:\\n\\r,])|\\d+(?:\\.\\d+)?\\b(?!\\s*[^\\s\"+=\\-*/(){}\\[\\]:\\n\\r,])))(?=.*[^\\s\"+=\\-*/(){}\\[\\]:\\n\\r])(?!\\s*(?:(?:[a-zA-Z_][a-zA-Z0-9_]*(?:\\s*\\.\\s*[a-zA-Z_][a-zA-Z0-9_]*)*\\s*(?:\\(|\\[))|(\\[|\\{|,)|(?:\"))))",
                     "beginCaptures": {
                         "0": {
                             "patterns": [
@@ -425,7 +431,7 @@
         "unquoted-string-values": {
             "patterns": [
                 {
-                    "begin": "(?!,?\\s*(?:/\\*[^*]*\\*\\/\\s*)*[a-zA-Z_][a-zA-Z0-9_]*\\s*:\\s*)(?<=:|,|\\[|(?:(?::|=)\\s*(?:/\\*[^*]*\\*+(?:[^/*][^*]*\\*+)*/\\s*)*))\\s*((?:\\/\\*[^*]*\\*\\/\\s*)*)((?!\\s*(?:(?:true|false|null)\\b(?!\\s*[^\\s\"+=\\-*/(){}\\[\\]:\\n\\r,])|\\d+(?:\\.\\d+)?\\b(?!\\s*[^\\s\"+=\\-*/(){}\\[\\]:\\n\\r,])))(?=.*[^\\s\"+=\\-*/(){}\\[\\]:\\n\\r])(?!\\s*(?:(?:[a-zA-Z_][a-zA-Z0-9_]*(?:\\s*\\.\\s*[a-zA-Z_][a-zA-Z0-9_]*)*\\s*(?:\\(|\\[))|(\\[|\\{|,)|(?:\"))))",
+                    "begin": "(?!,?\\s*(?:/\\*[^*]*\\*\\/\\s*)*[a-zA-Z_][a-zA-Z0-9_]*\\s*:\\s*)(?<=:|,|\\[|(?:(?::|=)\\s*(?:/\\*[^*]*\\*+(?:[^/*][^*]*\\*+)*/\\s*)*))\\s*((?:\\/\\*[^*]*\\*\\/\\s*)*)(?!\\s*(?:function)\\b)((?!\\s*(?:(?:true|false|null)\\b(?!\\s*[^\\s\"+=\\-*/(){}\\[\\]:\\n\\r,])|\\d+(?:\\.\\d+)?\\b(?!\\s*[^\\s\"+=\\-*/(){}\\[\\]:\\n\\r,])))(?=.*[^\\s\"+=\\-*/(){}\\[\\]:\\n\\r])(?!\\s*(?:(?:[a-zA-Z_][a-zA-Z0-9_]*(?:\\s*\\.\\s*[a-zA-Z_][a-zA-Z0-9_]*)*\\s*(?:\\(|\\[))|(\\[|\\{|,)|(?:\"))))",
                     "beginCaptures": {
                         "1": {
                             "patterns": [
@@ -539,15 +545,6 @@
         "indents-in-beat": {
             "patterns": [
                 {
-                    "include": "#beat-block"
-                },
-                {
-                    "include": "#state-block"
-                },
-                {
-                    "include": "#choice-block"
-                },
-                {
                     "include": "#indent-beat-block"
                 },
                 {
@@ -555,11 +552,23 @@
                 },
                 {
                     "include": "#indent-choice-block"
+                },
+                {
+                    "include": "#beat-block"
+                },
+                {
+                    "include": "#state-block"
+                },
+                {
+                    "include": "#choice-block"
                 }
             ]
         },
         "beat-patterns": {
             "patterns": [
+                {
+                    "include": "#indent-function-block"
+                },
                 {
                     "include": "#indent-beat-block"
                 },
@@ -577,6 +586,9 @@
                 },
                 {
                     "include": "#string-interpolation"
+                },
+                {
+                    "include": "#function-block"
                 },
                 {
                     "include": "#beat-block"
@@ -600,13 +612,13 @@
                     "include": "#quoted-strings"
                 },
                 {
+                    "include": "#unquoted-dialogues"
+                },
+                {
                     "include": "#assigns"
                 },
                 {
                     "include": "#transitions"
-                },
-                {
-                    "include": "#unquoted-dialogues"
                 },
                 {
                     "include": "#unquoted-strings"
@@ -765,7 +777,7 @@
         "unquoted-strings": {
             "patterns": [
                 {
-                    "begin": "^(?!\\s*(?:/\\*[^*]*\\*\\/\\s*)*\")(?!\\s*(?:/\\*[^*]*\\*\\/\\s*)*(?:(?:\\s*else\\s+)?(?:/\\*[^*]*\\*\\/\\s*)*if\\b\\s*(?:/\\*[^*]*\\*\\/\\s*)*(?:(?:!)?[a-zA-Z_][a-zA-Z0-9_]*(?:\\s*(?:\\.\\s*[a-zA-Z_][a-zA-Z0-9_]*|\\[.*?\\]|\\.))*\\s*(?:(?:\\band\\b|\\bor\\b|&&|\\|\\||==|>=|<=|>|<|\\+(?!=)|-(?!=)|\\*(?!=)|/(?!=))|\\(|{|->|$)|\\()|else\\b(?:\\s*(?:/\\*[^*]*\\*\\/\\s*))*(?:\\s*$|\\s*(?://|/\\*))))(?!\\s*->)(?!\\s*(?:state|beat|character|choice|else|new)\\b)(?!\\s*(?:/\\*[^*]*\\*\\/\\s*)*[a-zA-Z_][a-zA-Z0-9_]*\\s*:\\s*)(?!\\s*:)(?!\\s*})(?!\\s*])(?!\\s*\\[)(?!\\s*\\{)(?!\\s*(?:\\/\\*[^*]*\\*\\/\\s*)*[a-zA-Z_][a-zA-Z0-9_]*(?:\\s*\\.\\s*[a-zA-Z_][a-zA-Z0-9_]*)*(?:\\s*\\[.*\\])*\\s*(?:\\(|=(?!=)|\\+=|-=|\\*=|/=))(?!\\s*(?:/\\*[^*]*\\*\\/\\s*)*(?:_+|(?:_+[a-z0-9]|[a-z])[a-zA-Z0-9_]*)(?:\\s*\\.\\s*[a-zA-Z_][a-zA-Z0-9_]*)*(?:\\s*\\[.*?\\])*\\s*(?:/\\*[^*]*\\*\\/\\s*|\\s)*$)(?!\\s*(?:/\\*[^*]*\\*\\/\\s*)*(?:_+|(?:_+[a-z0-9]|[a-z])[a-zA-Z0-9_]*)(?:\\s*\\.\\s*[a-zA-Z_][a-zA-Z0-9_]*)*(?:\\s*\\[.*?\\])*\\s*\\.\\s*(?:/\\*[^*]*\\*\\/\\s*|\\s)*(?:$|//|/\\*))(?!\\s*(?:/\\*[^*]*\\*\\/\\s*)*(?:_+|(?:_+[a-z0-9]|[a-z])[a-zA-Z0-9_]*)(?:\\s*\\.\\s*[a-zA-Z_][a-zA-Z0-9_]*)*(?:\\s*\\[.*?\\])*(?:\\s*\\.\\s*[a-zA-Z_][a-zA-Z0-9_]*)+\\s*(?:/\\*[^*]*\\*\\/\\s*|\\s)*(?:$|//|/\\*))((?:\\/\\*[^*]*\\*\\/\\s*)*)(?=.*[^\\s\"+=\\-*/(){}\\[\\]:\\n\\r])(\\s*)",
+                    "begin": "^(?!\\s*(?:/\\*[^*]*\\*\\/\\s*)*\")(?!\\s*(?:/\\*[^*]*\\*\\/\\s*)*(?:(?:\\s*else\\s+)?(?:/\\*[^*]*\\*\\/\\s*)*if\\b\\s*(?:/\\*[^*]*\\*\\/\\s*)*(?:(?:!)?[a-zA-Z_][a-zA-Z0-9_]*(?:\\s*(?:\\.\\s*[a-zA-Z_][a-zA-Z0-9_]*|\\[.*?\\]|\\.))*\\s*(?:(?:\\band\\b|\\bor\\b|&&|\\|\\||==|>=|<=|>|<|\\+(?!=)|-(?!=)|\\*(?!=)|/(?!=))|\\(|{|->|$)|\\()|else\\b(?:\\s*(?:/\\*[^*]*\\*\\/\\s*))*(?:\\s*$|\\s*(?://|/\\*))))(?!\\s*->)(?!\\s*(?:state|beat|character|choice|else|new|function)\\b)(?!\\s*(?:/\\*[^*]*\\*\\/\\s*)*[a-zA-Z_][a-zA-Z0-9_]*\\s*:\\s*)(?!\\s*:)(?!\\s*})(?!\\s*])(?!\\s*\\[)(?!\\s*\\{)(?!\\s*(?:\\/\\*[^*]*\\*\\/\\s*)*[a-zA-Z_][a-zA-Z0-9_]*(?:\\s*\\.\\s*[a-zA-Z_][a-zA-Z0-9_]*)*(?:\\s*\\[.*\\])*\\s*(?:\\(|=(?!=)|\\+=|-=|\\*=|/=))(?!\\s*(?:/\\*[^*]*\\*\\/\\s*)*(?:_+|(?:_+[a-z0-9]|[a-z])[a-zA-Z0-9_]*)(?:\\s*\\.\\s*[a-zA-Z_][a-zA-Z0-9_]*)*(?:\\s*\\[.*?\\])*\\s*(?:/\\*[^*]*\\*\\/\\s*|\\s)*$)(?!\\s*(?:/\\*[^*]*\\*\\/\\s*)*(?:_+|(?:_+[a-z0-9]|[a-z])[a-zA-Z0-9_]*)(?:\\s*\\.\\s*[a-zA-Z_][a-zA-Z0-9_]*)*(?:\\s*\\[.*?\\])*\\s*\\.\\s*(?:/\\*[^*]*\\*\\/\\s*|\\s)*(?:$|//|/\\*))(?!\\s*(?:/\\*[^*]*\\*\\/\\s*)*(?:_+|(?:_+[a-z0-9]|[a-z])[a-zA-Z0-9_]*)(?:\\s*\\.\\s*[a-zA-Z_][a-zA-Z0-9_]*)*(?:\\s*\\[.*?\\])*(?:\\s*\\.\\s*[a-zA-Z_][a-zA-Z0-9_]*)+\\s*(?:/\\*[^*]*\\*\\/\\s*|\\s)*(?:$|//|/\\*))((?:\\/\\*[^*]*\\*\\/\\s*)*)(?=.*[^\\s\"+=\\-*/(){}\\[\\]:\\n\\r])(\\s*)",
                     "beginCaptures": {
                         "2": {}
                     },
@@ -795,7 +807,7 @@
         "unquoted-dialogues": {
             "patterns": [
                 {
-                    "begin": "(?<=^(?:\\s*(?:/\\*[^*]*\\*+(?:[^/*][^*]*\\*+)*/)*)*\\s*)(?!\\s*(?:state|beat|character|choice|else|new)\\b)(\\s*([a-zA-Z_][a-zA-Z0-9_]*)\\s*(:)\\s*)(?!\\s*if\\s*(?:/\\*[^*]*\\*/\\s*)*\\()(?!\\s*:)(?!\\s*})(?!\\s*])(?!\\s*\\[)(?!\\s*\\{)((?:\\/\\*[^*]*\\*\\/\\s*)*)(?!\\s*\")",
+                    "begin": "(?<=^(?:\\s*(?:/\\*[^*]*\\*+(?:[^/*][^*]*\\*+)*/)*)*\\s*)(?!\\s*(?:state|beat|character|choice|else|new|function)\\b)(\\s*([a-zA-Z_][a-zA-Z0-9_]*)\\s*(:)\\s*)(?!\\s*if\\s*(?:/\\*[^*]*\\*/\\s*)*\\()(?!\\s*:)(?!\\s*})(?!\\s*])(?!\\s*\\[)(?!\\s*\\{)((?:\\/\\*[^*]*\\*\\/\\s*)*)(?!\\s*\")",
                     "beginCaptures": {
                         "2": {
                             "name": "entity.name.class.loreline"
@@ -1320,6 +1332,243 @@
                 },
                 {
                     "include": "#quoted-strings"
+                }
+            ]
+        },
+        "indent-function-block": {
+            "patterns": [
+                {
+                    "begin": "(^[ \\t]*)((?:\\s*/\\*[^*]*\\*+(?:[^/*][^*]*\\*+)*/)*\\s*)(\\b(function)\\b)(?:((?:\\s*/\\*[^*]*\\*+(?:[^/*][^*]*\\*+)*/)*\\s*)([a-zA-Z_][a-zA-Z0-9_]*)?)?(\\s*(?:/\\*[^*]*\\*+(?:[^/*][^*]*\\*+)*/)*)\\s*\\(([^)]*)\\)(\\s*(?:/\\*[^*]*\\*+(?:[^/*][^*]*\\*+)*/)*)?(\\s*(?://.*))?$",
+                    "beginCaptures": {
+                        "2": {
+                            "patterns": [
+                                {
+                                    "include": "#comments"
+                                }
+                            ]
+                        },
+                        "4": {
+                            "name": "keyword.control.function.indentf.loreline"
+                        },
+                        "5": {
+                            "patterns": [
+                                {
+                                    "include": "#comments"
+                                }
+                            ]
+                        },
+                        "6": {
+                            "name": "entity.name.function.loreline"
+                        },
+                        "7": {
+                            "patterns": [
+                                {
+                                    "include": "#comments"
+                                }
+                            ]
+                        },
+                        "8": {
+                            "patterns": [
+                                {
+                                    "include": "#function-parameters"
+                                }
+                            ]
+                        },
+                        "9": {
+                            "patterns": [
+                                {
+                                    "include": "#comments"
+                                }
+                            ]
+                        },
+                        "10": {
+                            "patterns": [
+                                {
+                                    "include": "#comments"
+                                }
+                            ]
+                        }
+                    },
+                    "end": "^(?![ \\t]*$)(?=\\1\\S|\\S)",
+                    "patterns": [
+                        {
+                            "include": "#comments"
+                        },
+                        {
+                            "include": "#function-patterns"
+                        }
+                    ]
+                }
+            ]
+        },
+        "function-block": {
+            "patterns": [
+                {
+                    "begin": "((?:\\s*/\\*[^*]*\\*+(?:[^/*][^*]*\\*+)*/)*\\s*)(\\b(function)\\b)(?:((?:\\s*/\\*[^*]*\\*+(?:[^/*][^*]*\\*+)*/)*\\s*)([a-zA-Z_][a-zA-Z0-9_]*)?)?(\\s*(?:/\\*[^*]*\\*+(?:[^/*][^*]*\\*+)*/)*)\\s*\\(([^)]*)\\)",
+                    "beginCaptures": {
+                        "1": {
+                            "patterns": [
+                                {
+                                    "include": "#comments"
+                                }
+                            ]
+                        },
+                        "3": {
+                            "name": "keyword.control.function.bracef.loreline"
+                        },
+                        "4": {
+                            "patterns": [
+                                {
+                                    "include": "#comments"
+                                }
+                            ]
+                        },
+                        "5": {
+                            "name": "entity.name.function.loreline"
+                        },
+                        "6": {
+                            "patterns": [
+                                {
+                                    "include": "#comments"
+                                }
+                            ]
+                        },
+                        "7": {
+                            "patterns": [
+                                {
+                                    "include": "#function-parameters"
+                                }
+                            ]
+                        }
+                    },
+                    "end": "(?<=\\})",
+                    "patterns": [
+                        {
+                            "include": "#comments"
+                        },
+                        {
+                            "include": "#braces-in-function"
+                        },
+                        {
+                            "include": "#indents-in-function"
+                        }
+                    ]
+                }
+            ]
+        },
+        "function-parameters": {
+            "patterns": [
+                {
+                    "match": "(\\s*(?:/\\*[^*]*\\*+(?:[^/*][^*]*\\*+)*/\\s*)*)([a-zA-Z_][a-zA-Z0-9_]*)(\\s*(?:/\\*[^*]*\\*+(?:[^/*][^*]*\\*+)*/\\s*)*)(?:,|$)",
+                    "captures": {
+                        "1": {
+                            "patterns": [
+                                {
+                                    "include": "#comments"
+                                }
+                            ]
+                        },
+                        "2": {
+                            "name": "variable.parameter.loreline"
+                        },
+                        "3": {
+                            "patterns": [
+                                {
+                                    "include": "#comments"
+                                }
+                            ]
+                        }
+                    }
+                }
+            ]
+        },
+        "braces-in-function": {
+            "begin": "\\{",
+            "beginCaptures": {
+                "0": {
+                    "name": "punctuation.section.block.begin.loreline"
+                }
+            },
+            "end": "\\}",
+            "endCaptures": {
+                "0": {
+                    "name": "punctuation.section.block.end.loreline"
+                }
+            },
+            "patterns": [
+                {
+                    "include": "#function-patterns"
+                }
+            ]
+        },
+        "indents-in-function": {
+            "patterns": [
+                {
+                    "include": "#function-patterns"
+                }
+            ]
+        },
+        "function-patterns": {
+            "patterns": [
+                {
+                    "include": "#comments"
+                },
+                {
+                    "include": "#indent-function-block"
+                },
+                {
+                    "include": "#function-block"
+                },
+                {
+                    "include": "#quoted-string-values"
+                },
+                {
+                    "include": "#function-keywords"
+                },
+                {
+                    "include": "#function-operators"
+                },
+                {
+                    "include": "#constants"
+                },
+                {
+                    "include": "#variables"
+                }
+            ]
+        },
+        "function-operators": {
+            "patterns": [
+                {
+                    "name": "keyword.operator.arithmetic.loreline",
+                    "match": "\\+|-|\\*|/|%|\\+\\+|--"
+                },
+                {
+                    "name": "keyword.operator.assignment.loreline",
+                    "match": "=|\\+=|-=|\\*=|/=|%=|<<=|>>=|>>>=|&=|\\|=|\\^="
+                },
+                {
+                    "name": "keyword.operator.logical.loreline",
+                    "match": "&&|\\|\\||!|==|!=|>|<|>=|<=|===|!=="
+                },
+                {
+                    "name": "keyword.operator.bitwise.loreline",
+                    "match": "&|\\||\\^|~|<<|>>|>>>"
+                },
+                {
+                    "name": "keyword.operator.ternary.loreline",
+                    "match": "\\?|:"
+                },
+                {
+                    "name": "keyword.operator.accessor.loreline",
+                    "match": "\\."
+                }
+            ]
+        },
+        "function-keywords": {
+            "patterns": [
+                {
+                    "name": "keyword.control.loreline",
+                    "match": "\\b(if|else|new|and|or|while|do|try|catch|for|switch|case|class|enum|abstract|return|throw|default)\\b"
                 }
             ]
         }

@@ -411,7 +411,7 @@ loreline_lsp_Server.prototype = {
 						return items;
 					case loreline_NLiteral:
 						var literal = resolved;
-						var _g = literal.type;
+						var _g = literal.literalType;
 						switch(_g._hx_index) {
 						case 0:
 							break;
@@ -666,7 +666,7 @@ loreline_lsp_Server.prototype = {
 			return this.makeHover("**Condition**",null,content,node);
 		case loreline_NLiteral:
 			var literal = node;
-			var _g = literal.type;
+			var _g = literal.literalType;
 			switch(_g._hx_index) {
 			case 0:
 				return this.makeHover(this.hoverTitle("Number"),this.hoverDescriptionForNode(literal),content,literal);
@@ -689,7 +689,7 @@ loreline_lsp_Server.prototype = {
 			var parent = node;
 			do parent = lens.getParentNode(parent); while(parent != null);
 			var stringPart = node;
-			var _g = stringPart.type;
+			var _g = stringPart.partType;
 			switch(_g._hx_index) {
 			case 0:
 				var text = _g.text;
@@ -707,7 +707,7 @@ loreline_lsp_Server.prototype = {
 				var literalParent = lens.getParentNode(literal);
 				if(literalParent != null && ((literalParent) instanceof loreline_NStringPart)) {
 					var parentStringPart = literalParent;
-					var _g = parentStringPart.type;
+					var _g = parentStringPart.partType;
 					switch(_g._hx_index) {
 					case 0:
 						var text = _g.text;
@@ -729,7 +729,7 @@ loreline_lsp_Server.prototype = {
 						var _g1 = partIndex;
 						_hx_loop2: while(_g < _g1) {
 							var i = _g++;
-							var _g2 = literal.parts[i].type;
+							var _g2 = literal.parts[i].partType;
 							switch(_g2._hx_index) {
 							case 0:
 								var text = _g2.text;
@@ -749,7 +749,7 @@ loreline_lsp_Server.prototype = {
 							}
 						}
 						if(keepWhitespace) {
-							var _g = literal.parts[partIndex].type;
+							var _g = literal.parts[partIndex].partType;
 							if(_g._hx_index == 0) {
 								var text = _g.text;
 								var spaces = text.length - StringTools.ltrim(text).length;
@@ -761,7 +761,7 @@ loreline_lsp_Server.prototype = {
 					}
 				} else if(literal.quotes == 1) {
 					if(literal.parts.length == 1) {
-						var _g = literal.parts[0].type;
+						var _g = literal.parts[0].partType;
 						switch(_g._hx_index) {
 						case 0:
 							var text = _g.text;
@@ -775,7 +775,7 @@ loreline_lsp_Server.prototype = {
 							break;
 						}
 					} else if(partIndex == 0) {
-						var _g = literal.parts[0].type;
+						var _g = literal.parts[0].partType;
 						switch(_g._hx_index) {
 						case 0:
 							var text = _g.text;
@@ -789,7 +789,7 @@ loreline_lsp_Server.prototype = {
 							break;
 						}
 					} else if(partIndex == literal.parts.length - 1) {
-						var _g = literal.parts[literal.parts.length - 1].type;
+						var _g = literal.parts[literal.parts.length - 1].partType;
 						switch(_g._hx_index) {
 						case 0:
 							var text = _g.text;
@@ -805,7 +805,7 @@ loreline_lsp_Server.prototype = {
 					}
 				}
 			}
-			var _g = stringPart.type;
+			var _g = stringPart.partType;
 			switch(_g._hx_index) {
 			case 0:
 				var text = _g.text;
@@ -822,11 +822,18 @@ loreline_lsp_Server.prototype = {
 		case loreline_NStringLiteral:case loreline_NTextStatement:
 			return this.makeHover(this.hoverTitle("Text"),this.hoverDescriptionForNode(node),content,node);
 		case loreline_NTransition:
-			var beat = lens.findBeatFromTransition(node);
-			if(beat != null) {
-				return this.makeBeatDeclHover(beat,uri,content,lens,node);
+			var transition = node;
+			if(transition.target == ".") {
+				return this.makeHover(this.hoverTitle("End"),this.hoverDescriptionForNode(node),content,node);
+			} else if(transition.target == "_") {
+				return this.makeHover(this.hoverTitle("Root"),this.hoverDescriptionForNode(node),content,node);
 			} else {
-				return this.makeHover(this.hoverTitle("Transition"),this.hoverDescriptionForNode(node),content,node);
+				var beat = lens.findBeatFromTransition(transition);
+				if(beat != null) {
+					return this.makeBeatDeclHover(beat,uri,content,lens,node);
+				} else {
+					return this.makeHover(this.hoverTitle("Transition"),this.hoverDescriptionForNode(node),content,node);
+				}
 			}
 			break;
 		default:
@@ -953,14 +960,16 @@ loreline_lsp_Server.prototype = {
 		var characterModifiedFields = lens.findModifiedCharacterFields(beatDecl);
 		if(readFields.length > 0 || modifiedFields.length > 0 || characterReadFields.length > 0 || characterModifiedFields.length > 0) {
 			var stateTargets = [];
-			var usedStateTargets_h = { };
+			var usedStateTargets_map = new loreline_Int64Map();
 			if(modifiedFields.length > 0) {
 				var _g = 0;
 				while(_g < modifiedFields.length) {
 					var ref = modifiedFields[_g];
 					++_g;
-					if(!usedStateTargets_h.hasOwnProperty(ref.target.id)) {
-						usedStateTargets_h[ref.target.id] = true;
+					var key = ref.target.id;
+					if(!usedStateTargets_map._exists(key.high,key.low)) {
+						var key1 = ref.target.id;
+						usedStateTargets_map._set(key1.high,key1.low,true);
 						stateTargets.push("**" + this.makePositionLink(ref.target.name,uri,ref.target) + "**");
 					}
 				}
@@ -970,8 +979,10 @@ loreline_lsp_Server.prototype = {
 				while(_g < readFields.length) {
 					var ref = readFields[_g];
 					++_g;
-					if(!usedStateTargets_h.hasOwnProperty(ref.target.id)) {
-						usedStateTargets_h[ref.target.id] = true;
+					var key = ref.target.id;
+					if(!usedStateTargets_map._exists(key.high,key.low)) {
+						var key1 = ref.target.id;
+						usedStateTargets_map._set(key1.high,key1.low,true);
 						stateTargets.push(this.makePositionLink(ref.target.name,uri,ref.target));
 					}
 				}
@@ -980,15 +991,17 @@ loreline_lsp_Server.prototype = {
 				description.push("- State: " + stateTargets.join(", "));
 			}
 			var characters = [];
-			var usedCharacters_h = { };
+			var usedCharacters_map = new loreline_Int64Map();
 			if(characterModifiedFields.length > 0) {
 				var _g = 0;
 				while(_g < characterModifiedFields.length) {
 					var ref = characterModifiedFields[_g];
 					++_g;
 					var refCharacter = lens.getFirstParentOfType(ref.target,loreline_NCharacterDecl);
-					if(!usedCharacters_h.hasOwnProperty(refCharacter.id)) {
-						usedCharacters_h[refCharacter.id] = true;
+					var key = refCharacter.id;
+					if(!usedCharacters_map._exists(key.high,key.low)) {
+						var key1 = refCharacter.id;
+						usedCharacters_map._set(key1.high,key1.low,true);
 						characters.push(refCharacter);
 					}
 				}
@@ -999,8 +1012,10 @@ loreline_lsp_Server.prototype = {
 					var ref = characterReadFields[_g];
 					++_g;
 					var refCharacter = lens.getFirstParentOfType(ref.target,loreline_NCharacterDecl);
-					if(!usedCharacters_h.hasOwnProperty(refCharacter.id)) {
-						usedCharacters_h[refCharacter.id] = true;
+					var key = refCharacter.id;
+					if(!usedCharacters_map._exists(key.high,key.low)) {
+						var key1 = refCharacter.id;
+						usedCharacters_map._set(key1.high,key1.low,true);
 						characters.push(refCharacter);
 					}
 				}
@@ -1010,15 +1025,16 @@ loreline_lsp_Server.prototype = {
 				var character = characters[_g];
 				++_g;
 				var characterTargets = [];
-				var usedCharacterTargets_h = { };
+				var usedCharacterTargets_map = new loreline_Int64Map();
 				if(characterModifiedFields.length > 0) {
 					var _g1 = 0;
 					while(_g1 < characterModifiedFields.length) {
 						var ref = characterModifiedFields[_g1];
 						++_g1;
 						var refCharacter = lens.getFirstParentOfType(ref.target,loreline_NCharacterDecl);
-						if(refCharacter.id == character.id) {
-							usedCharacterTargets_h[ref.target.id] = true;
+						if(loreline_NodeId.equals(refCharacter.id,character.id)) {
+							var key = ref.target.id;
+							usedCharacterTargets_map._set(key.high,key.low,true);
 							characterTargets.push("**" + this.makePositionLink(ref.target.name,uri,ref.target) + "**");
 						}
 					}
@@ -1028,10 +1044,12 @@ loreline_lsp_Server.prototype = {
 					while(_g2 < characterReadFields.length) {
 						var ref1 = characterReadFields[_g2];
 						++_g2;
-						if(!usedCharacterTargets_h.hasOwnProperty(ref1.target.id)) {
+						var key1 = ref1.target.id;
+						if(!usedCharacterTargets_map._exists(key1.high,key1.low)) {
 							var refCharacter1 = lens.getFirstParentOfType(ref1.target,loreline_NCharacterDecl);
-							if(refCharacter1.id == character.id) {
-								usedCharacterTargets_h[ref1.target.id] = true;
+							if(loreline_NodeId.equals(refCharacter1.id,character.id)) {
+								var key2 = ref1.target.id;
+								usedCharacterTargets_map._set(key2.high,key2.low,true);
 								characterTargets.push(this.makePositionLink(ref1.target.name,uri,ref1.target));
 							}
 						}
@@ -1592,6 +1610,14 @@ haxe_Exception.prototype = $extend(Error.prototype,{
 	}
 	,__class__: haxe_Exception
 });
+var haxe__$Int64__$_$_$Int64 = function(high,low) {
+	this.high = high;
+	this.low = low;
+};
+haxe__$Int64__$_$_$Int64.__name__ = "haxe._Int64.___Int64";
+haxe__$Int64__$_$_$Int64.prototype = {
+	__class__: haxe__$Int64__$_$_$Int64
+};
 var haxe_Log = function() { };
 haxe_Log.__name__ = "haxe.Log";
 haxe_Log.formatOutput = function(v,infos) {
@@ -1758,27 +1784,6 @@ haxe_ValueException.prototype = $extend(haxe_Exception.prototype,{
 	}
 	,__class__: haxe_ValueException
 });
-var haxe_ds_IntMap = function() {
-	this.h = { };
-};
-haxe_ds_IntMap.__name__ = "haxe.ds.IntMap";
-haxe_ds_IntMap.__interfaces__ = [haxe_IMap];
-haxe_ds_IntMap.prototype = {
-	keys: function() {
-		var a = [];
-		for( var key in this.h ) if(this.h.hasOwnProperty(key)) a.push(+key);
-		return new haxe_iterators_ArrayIterator(a);
-	}
-	,iterator: function() {
-		return { ref : this.h, it : this.keys(), hasNext : function() {
-			return this.it.hasNext();
-		}, next : function() {
-			var i = this.it.next();
-			return this.ref[i];
-		}};
-	}
-	,__class__: haxe_ds_IntMap
-};
 var haxe_ds_StringMap = function() {
 	this.h = Object.create(null);
 };
@@ -1786,6 +1791,41 @@ haxe_ds_StringMap.__name__ = "haxe.ds.StringMap";
 haxe_ds_StringMap.__interfaces__ = [haxe_IMap];
 haxe_ds_StringMap.prototype = {
 	__class__: haxe_ds_StringMap
+};
+var haxe_ds_Vector = {};
+haxe_ds_Vector.blit = function(src,srcPos,dest,destPos,len) {
+	if(src == dest) {
+		if(srcPos < destPos) {
+			var i = srcPos + len;
+			var j = destPos + len;
+			var _g = 0;
+			var _g1 = len;
+			while(_g < _g1) {
+				var k = _g++;
+				--i;
+				--j;
+				src[j] = src[i];
+			}
+		} else if(srcPos > destPos) {
+			var i = srcPos;
+			var j = destPos;
+			var _g = 0;
+			var _g1 = len;
+			while(_g < _g1) {
+				var k = _g++;
+				src[j] = src[i];
+				++i;
+				++j;
+			}
+		}
+	} else {
+		var _g = 0;
+		var _g1 = len;
+		while(_g < _g1) {
+			var i = _g++;
+			dest[destPos + i] = src[srcPos + i];
+		}
+	}
 };
 var haxe_io_Bytes = function(data) {
 	this.length = data.byteLength;
@@ -2074,6 +2114,283 @@ loreline_Error.prototype = {
 	}
 	,__class__: loreline_Error
 };
+var loreline_Int64Map = function() {
+	this.mask = 0;
+	this.size = 0;
+	this._values = null;
+	this._keys2 = null;
+	this._keys1 = null;
+	var oldK1 = this._keys1;
+	var oldK2 = this._keys2;
+	var oldVals = this._values;
+	this._keys1 = new Array(16);
+	this._keys2 = new Array(16);
+	this._values = new Array(16);
+	this.mask = 15;
+	if(oldK1 != null) {
+		this.size = 0;
+		var _g = 0;
+		var _g1 = oldK1.length;
+		while(_g < _g1) {
+			var i = _g++;
+			if(oldVals[i] != null) {
+				this._set(oldK1[i],oldK2[i],oldVals[i]);
+			}
+		}
+	}
+};
+loreline_Int64Map.__name__ = "loreline.Int64Map";
+loreline_Int64Map.prototype = {
+	resize: function(newCapacity) {
+		var oldK1 = this._keys1;
+		var oldK2 = this._keys2;
+		var oldVals = this._values;
+		this._keys1 = new Array(newCapacity);
+		this._keys2 = new Array(newCapacity);
+		this._values = new Array(newCapacity);
+		this.mask = newCapacity - 1;
+		if(oldK1 != null) {
+			this.size = 0;
+			var _g = 0;
+			var _g1 = oldK1.length;
+			while(_g < _g1) {
+				var i = _g++;
+				if(oldVals[i] != null) {
+					this._set(oldK1[i],oldK2[i],oldVals[i]);
+				}
+			}
+		}
+	}
+	,hashCoords: function(high,low) {
+		var h = high + (low << 16);
+		h = (h ^ h >>> 16) * -2048144789;
+		h = (h ^ h >>> 13) * -1028477387;
+		return h ^ h >>> 16;
+	}
+	,clear: function() {
+		this._keys1 = null;
+		this._keys2 = null;
+		this._values = null;
+		var oldK1 = this._keys1;
+		var oldK2 = this._keys2;
+		var oldVals = this._values;
+		this._keys1 = new Array(16);
+		this._keys2 = new Array(16);
+		this._values = new Array(16);
+		this.mask = 15;
+		if(oldK1 != null) {
+			this.size = 0;
+			var _g = 0;
+			var _g1 = oldK1.length;
+			while(_g < _g1) {
+				var i = _g++;
+				if(oldVals[i] != null) {
+					this._set(oldK1[i],oldK2[i],oldVals[i]);
+				}
+			}
+		}
+		this.size = 0;
+	}
+	,copy: function() {
+		var result = new loreline_Int64Map();
+		var this1 = this._keys1;
+		var r = new Array(this1.length);
+		haxe_ds_Vector.blit(this1,0,r,0,this1.length);
+		result._keys1 = r;
+		var this1 = this._keys2;
+		var r = new Array(this1.length);
+		haxe_ds_Vector.blit(this1,0,r,0,this1.length);
+		result._keys2 = r;
+		var this1 = this._values;
+		var r = new Array(this1.length);
+		haxe_ds_Vector.blit(this1,0,r,0,this1.length);
+		result._values = r;
+		result.size = this.size;
+		result.mask = this.mask;
+		return result;
+	}
+	,_set: function(high,low,value) {
+		if(this.size >= (this.mask + 1) * 0.75) {
+			var newCapacity = this.mask + 1 << 1;
+			var oldK1 = this._keys1;
+			var oldK2 = this._keys2;
+			var oldVals = this._values;
+			this._keys1 = new Array(newCapacity);
+			this._keys2 = new Array(newCapacity);
+			this._values = new Array(newCapacity);
+			this.mask = newCapacity - 1;
+			if(oldK1 != null) {
+				this.size = 0;
+				var _g = 0;
+				var _g1 = oldK1.length;
+				while(_g < _g1) {
+					var i = _g++;
+					if(oldVals[i] != null) {
+						this._set(oldK1[i],oldK2[i],oldVals[i]);
+					}
+				}
+			}
+		}
+		var h = high + (low << 16);
+		h = (h ^ h >>> 16) * -2048144789;
+		h = (h ^ h >>> 13) * -1028477387;
+		var hash = h ^ h >>> 16;
+		var index = hash & this.mask;
+		while(true) {
+			if(this._values[index] == null) {
+				this._keys1[index] = high;
+				this._keys2[index] = low;
+				this._values[index] = value;
+				this.size++;
+				return;
+			}
+			if(this._keys1[index] == high && this._keys2[index] == low) {
+				this._values[index] = value;
+				return;
+			}
+			index = index + 1 & this.mask;
+		}
+	}
+	,_get: function(high,low) {
+		var h = high + (low << 16);
+		h = (h ^ h >>> 16) * -2048144789;
+		h = (h ^ h >>> 13) * -1028477387;
+		var hash = h ^ h >>> 16;
+		var index = hash & this.mask;
+		while(true) {
+			if(this._values[index] == null) {
+				return null;
+			}
+			if(this._keys1[index] == high && this._keys2[index] == low) {
+				return this._values[index];
+			}
+			index = index + 1 & this.mask;
+		}
+	}
+	,_exists: function(high,low) {
+		var h = high + (low << 16);
+		h = (h ^ h >>> 16) * -2048144789;
+		h = (h ^ h >>> 13) * -1028477387;
+		var hash = h ^ h >>> 16;
+		var index = hash & this.mask;
+		while(true) {
+			if(this._values[index] == null) {
+				return false;
+			}
+			if(this._keys1[index] == high && this._keys2[index] == low) {
+				return true;
+			}
+			index = index + 1 & this.mask;
+		}
+	}
+	,_remove: function(high,low) {
+		var h = high + (low << 16);
+		h = (h ^ h >>> 16) * -2048144789;
+		h = (h ^ h >>> 13) * -1028477387;
+		var hash = h ^ h >>> 16;
+		var index = hash & this.mask;
+		while(true) {
+			if(this._values[index] == null) {
+				return false;
+			}
+			if(this._keys1[index] == high && this._keys2[index] == low) {
+				this._values[index] = null;
+				this.size--;
+				index = index + 1 & this.mask;
+				while(this._values[index] != null) {
+					var k1 = this._keys1[index];
+					var k2 = this._keys2[index];
+					var v = this._values[index];
+					this._values[index] = null;
+					this.size--;
+					this._set(k1,k2,v);
+					index = index + 1 & this.mask;
+				}
+				return true;
+			}
+			index = index + 1 & this.mask;
+		}
+	}
+	,iterator: function() {
+		return new loreline__$Int64Map_Int64MapIterator(this);
+	}
+	,keyIterator: function() {
+		return new loreline__$Int64Map_Int64MapKeyIterator(this);
+	}
+	,keyValueIterator: function() {
+		return new loreline__$Int64Map_Int64MapKeyValueIterator(this);
+	}
+	,length: function() {
+		return this.size;
+	}
+	,__class__: loreline_Int64Map
+};
+var loreline__$Int64Map_Int64MapIterator = function(map) {
+	this.map = map;
+	this.index = 0;
+	while(this.index < this.map._values.length && this.map._values[this.index] == null) this.index++;
+};
+loreline__$Int64Map_Int64MapIterator.__name__ = "loreline._Int64Map.Int64MapIterator";
+loreline__$Int64Map_Int64MapIterator.prototype = {
+	skipNulls: function() {
+		while(this.index < this.map._values.length && this.map._values[this.index] == null) this.index++;
+	}
+	,hasNext: function() {
+		return this.index < this.map._values.length;
+	}
+	,next: function() {
+		var v = this.map._values[this.index];
+		this.index++;
+		while(this.index < this.map._values.length && this.map._values[this.index] == null) this.index++;
+		return v;
+	}
+	,__class__: loreline__$Int64Map_Int64MapIterator
+};
+var loreline__$Int64Map_Int64MapKeyIterator = function(map) {
+	this.map = map;
+	this.index = 0;
+	while(this.index < this.map._values.length && this.map._values[this.index] == null) this.index++;
+};
+loreline__$Int64Map_Int64MapKeyIterator.__name__ = "loreline._Int64Map.Int64MapKeyIterator";
+loreline__$Int64Map_Int64MapKeyIterator.prototype = {
+	skipNulls: function() {
+		while(this.index < this.map._values.length && this.map._values[this.index] == null) this.index++;
+	}
+	,hasNext: function() {
+		return this.index < this.map._values.length;
+	}
+	,next: function() {
+		var k1 = this.map._keys1[this.index];
+		var k2 = this.map._keys2[this.index];
+		this.index++;
+		while(this.index < this.map._values.length && this.map._values[this.index] == null) this.index++;
+		return { high : k1, low : k2};
+	}
+	,__class__: loreline__$Int64Map_Int64MapKeyIterator
+};
+var loreline__$Int64Map_Int64MapKeyValueIterator = function(map) {
+	this.map = map;
+	this.index = 0;
+	while(this.index < this.map._values.length && this.map._values[this.index] == null) this.index++;
+};
+loreline__$Int64Map_Int64MapKeyValueIterator.__name__ = "loreline._Int64Map.Int64MapKeyValueIterator";
+loreline__$Int64Map_Int64MapKeyValueIterator.prototype = {
+	skipNulls: function() {
+		while(this.index < this.map._values.length && this.map._values[this.index] == null) this.index++;
+	}
+	,hasNext: function() {
+		return this.index < this.map._values.length;
+	}
+	,next: function() {
+		var k1 = this.map._keys1[this.index];
+		var k2 = this.map._keys2[this.index];
+		var v = this.map._values[this.index];
+		this.index++;
+		while(this.index < this.map._values.length && this.map._values[this.index] == null) this.index++;
+		return { key : { high : k1, low : k2}, value : v};
+	}
+	,__class__: loreline__$Int64Map_Int64MapKeyValueIterator
+};
 var loreline_Reference = function(target,origin) {
 	this.target = target;
 	this.origin = origin;
@@ -2083,9 +2400,9 @@ loreline_Reference.prototype = {
 	__class__: loreline_Reference
 };
 var loreline_Lens = function(script) {
-	this.childNodes = new haxe_ds_IntMap();
-	this.parentNodes = new haxe_ds_IntMap();
-	this.nodesById = new haxe_ds_IntMap();
+	this.childNodes = new loreline_NodeIdMap();
+	this.parentNodes = new loreline_NodeIdMap();
+	this.nodesById = new loreline_NodeIdMap();
 	this.script = script;
 	this.initialize();
 };
@@ -2094,17 +2411,25 @@ loreline_Lens.prototype = {
 	initialize: function() {
 		var _gthis = this;
 		this.script.each(function(node,parent) {
-			_gthis.nodesById.h[node.id] = node;
+			var key = node.id;
+			_gthis.nodesById.map._set(key.high,key.low,node);
 			if(parent != null) {
-				_gthis.parentNodes.h[node.id] = parent;
-				var children = _gthis.childNodes.h[parent.id];
+				var key = node.id;
+				_gthis.parentNodes.map._set(key.high,key.low,parent);
+				var key = parent.id;
+				var children = _gthis.childNodes.map._get(key.high,key.low);
 				if(children == null) {
 					children = [];
-					_gthis.childNodes.h[parent.id] = children;
+					var key = parent.id;
+					_gthis.childNodes.map._set(key.high,key.low,children);
 				}
 				children.push(node);
 			}
 		});
+	}
+	,getNodeById: function(id) {
+		var key = id;
+		return this.nodesById.map._get(key.high,key.low);
 	}
 	,getNodeAtPosition: function(pos) {
 		var bestMatch = null;
@@ -2139,7 +2464,8 @@ loreline_Lens.prototype = {
 		return matches;
 	}
 	,getParentNode: function(node) {
-		return this.parentNodes.h[node.id];
+		var key = node.id;
+		return this.parentNodes.map._get(key.high,key.low);
 	}
 	,getFirstParentOfType: function(node,type) {
 		var current = node;
@@ -2155,7 +2481,8 @@ loreline_Lens.prototype = {
 		var ancestors = [];
 		var current = node;
 		while(current != null) {
-			current = this.parentNodes.h[current.id];
+			var key = current.id;
+			current = this.parentNodes.map._get(key.high,key.low);
 			if(current != null) {
 				ancestors.push(current);
 			}
@@ -2184,11 +2511,11 @@ loreline_Lens.prototype = {
 		switch(js_Boot.getClass(targetNode)) {
 		case loreline_NLiteral:
 			var literal = targetNode;
-			if(literal.type == loreline_LiteralType.Array) {
+			if(literal.literalType == loreline_LiteralType.Array) {
 				var elements = literal.value;
 				if(((access.index) instanceof loreline_NLiteral)) {
 					var indexLit = access.index;
-					if(indexLit.type == loreline_LiteralType.Number) {
+					if(indexLit.literalType == loreline_LiteralType.Number) {
 						var index = indexLit.value | 0;
 						if(index >= 0 && index < elements.length) {
 							var element = elements[index];
@@ -2204,11 +2531,11 @@ loreline_Lens.prototype = {
 			var field = targetNode;
 			if(((field.value) instanceof loreline_NLiteral)) {
 				var literal = field.value;
-				if(literal.type == loreline_LiteralType.Array) {
+				if(literal.literalType == loreline_LiteralType.Array) {
 					var elements = literal.value;
 					if(((access.index) instanceof loreline_NLiteral)) {
 						var indexLit = access.index;
-						if(indexLit.type == loreline_LiteralType.Number) {
+						if(indexLit.literalType == loreline_LiteralType.Number) {
 							var index = indexLit.value | 0;
 							if(index >= 0 && index < elements.length) {
 								var element = elements[index];
@@ -2247,7 +2574,7 @@ loreline_Lens.prototype = {
 					break;
 				case loreline_NLiteral:
 					var literal = targetNode;
-					var _g = literal.type;
+					var _g = literal.literalType;
 					if(_g._hx_index == 4) {
 						var style = _g.style;
 						var fields = literal.value;
@@ -2341,6 +2668,31 @@ loreline_Lens.prototype = {
 	,findBeatFromTransition: function(transition) {
 		return this.findBeatByNameFromNode(transition.target,transition);
 	}
+	,findBeatByPathFromNode: function(path,node) {
+		var parts = path.split(".");
+		var beat = this.findBeatByNameFromNode(parts[0],node);
+		var i = 1;
+		while(beat != null && i < parts.length) {
+			var name = [parts[i]];
+			var foundBeat = [null];
+			this.traverse(beat,(function(foundBeat,name) {
+				return function(node,parent) {
+					if(((node) instanceof loreline_NBeatDecl)) {
+						var beat = node;
+						if(beat.name == name[0]) {
+							foundBeat[0] = beat;
+						}
+						return false;
+					} else {
+						return foundBeat[0] == null;
+					}
+				};
+			})(foundBeat,name));
+			beat = foundBeat[0];
+			++i;
+		}
+		return beat;
+	}
 	,findBeatByNameFromNode: function(name,node) {
 		var result = null;
 		var parentBeat = this.getFirstParentOfType(node,loreline_NBeatDecl);
@@ -2391,7 +2743,7 @@ loreline_Lens.prototype = {
 	,getVisibleCharacters: function() {
 		var result = [];
 		var _g = 0;
-		var _g1 = this.script.declarations;
+		var _g1 = this.script.body;
 		while(_g < _g1.length) {
 			var node = _g1[_g];
 			++_g;
@@ -2404,7 +2756,7 @@ loreline_Lens.prototype = {
 	,getVisibleStateFields: function(fromNode) {
 		var _gthis = this;
 		var fields = [];
-		var seenFields_h = { };
+		var seenFields_map = new loreline_Int64Map();
 		var current = fromNode;
 		while(current != null) {
 			if(js_Boot.getClass(current) == loreline_NStateDecl) {
@@ -2414,13 +2766,16 @@ loreline_Lens.prototype = {
 				while(_g < _g1.length) {
 					var field = _g1[_g];
 					++_g;
-					if(!seenFields_h.hasOwnProperty(field.id)) {
-						seenFields_h[field.id] = true;
+					var key = field.id;
+					if(!seenFields_map._exists(key.high,key.low)) {
+						var key1 = field.id;
+						seenFields_map._set(key1.high,key1.low,true);
 						fields.push(field);
 					}
 				}
 			}
-			current = this.parentNodes.h[current.id];
+			var key2 = current.id;
+			current = this.parentNodes.map._get(key2.high,key2.low);
 		}
 		this.script.each(function(node,parent) {
 			if(js_Boot.getClass(node) == loreline_NStateDecl) {
@@ -2431,8 +2786,10 @@ loreline_Lens.prototype = {
 					while(_g < _g1.length) {
 						var field = _g1[_g];
 						++_g;
-						if(!seenFields_h.hasOwnProperty(field.id)) {
-							seenFields_h[field.id] = true;
+						var key = field.id;
+						if(!seenFields_map._exists(key.high,key.low)) {
+							var key1 = field.id;
+							seenFields_map._set(key1.high,key1.low,true);
 							fields.push(field);
 						}
 					}
@@ -2485,12 +2842,12 @@ loreline_Lens.prototype = {
 			while(_g < _g1.length) {
 				var part = _g1[_g];
 				++_g;
-				var _g2 = part.type;
+				var _g2 = part.partType;
 				if(_g2._hx_index == 2) {
 					var _g3 = _g2.closing;
 					var content = _g2.expr;
 					if(content.parts.length == 1) {
-						var _g4 = content.parts[0].type;
+						var _g4 = content.parts[0].partType;
 						if(_g4._hx_index == 0) {
 							var text = _g4.text;
 							var key = StringTools.trim(text);
@@ -2530,12 +2887,12 @@ loreline_Lens.prototype = {
 			while(_g < _g1.length) {
 				var part = _g1[_g];
 				++_g;
-				var _g2 = part.type;
+				var _g2 = part.partType;
 				if(_g2._hx_index == 2) {
 					var _g3 = _g2.closing;
 					var content = _g2.expr;
 					if(content.parts.length == 1) {
-						var _g4 = content.parts[0].type;
+						var _g4 = content.parts[0].partType;
 						if(_g4._hx_index == 0) {
 							var text = _g4.text;
 							text = StringTools.trim(text);
@@ -2571,7 +2928,7 @@ loreline_Lens.prototype = {
 	}
 	,findOutboundBeats: function(beatDecl) {
 		var _gthis = this;
-		var targetBeats = new haxe_ds_IntMap();
+		var targetBeats_map = new loreline_Int64Map();
 		this.traverse(beatDecl,function(node,parent) {
 			switch(js_Boot.getClass(node)) {
 			case loreline_NCall:
@@ -2583,7 +2940,8 @@ loreline_Lens.prototype = {
 						if(targetBeat != null) {
 							var key = targetBeat.id;
 							var value = new loreline_Reference(targetBeat,call);
-							targetBeats.h[key] = value;
+							var key1 = key;
+							targetBeats_map._set(key1.high,key1.low,value);
 						}
 					}
 				}
@@ -2594,7 +2952,8 @@ loreline_Lens.prototype = {
 				if(targetBeat != null) {
 					var key = targetBeat.id;
 					var value = new loreline_Reference(targetBeat,transition);
-					targetBeats.h[key] = value;
+					var key1 = key;
+					targetBeats_map._set(key1.high,key1.low,value);
 				}
 				break;
 			default:
@@ -2602,10 +2961,15 @@ loreline_Lens.prototype = {
 			return true;
 		});
 		var _g = [];
-		var ref = targetBeats.iterator();
-		while(ref.hasNext()) {
-			var ref1 = ref.next();
-			_g.push(ref1);
+		var _g_map = targetBeats_map;
+		var _g_index = 0;
+		while(_g_index < _g_map._values.length && _g_map._values[_g_index] == null) ++_g_index;
+		while(_g_index < _g_map._values.length) {
+			var v = _g_map._values[_g_index];
+			++_g_index;
+			while(_g_index < _g_map._values.length && _g_map._values[_g_index] == null) ++_g_index;
+			var ref = v;
+			_g.push(ref);
 		}
 		return _g;
 	}
@@ -2620,7 +2984,7 @@ loreline_Lens.prototype = {
 					var access = call.target;
 					if(access.target == null && access.name == beatDecl.name) {
 						var foundBeat = _gthis.findBeatFromAccess(access);
-						if(foundBeat != null && foundBeat.id == beatDecl.id) {
+						if(foundBeat != null && loreline_NodeId.equals(foundBeat.id,beatDecl.id)) {
 							references.push(new loreline_Reference(beatDecl,call));
 						}
 					}
@@ -2726,7 +3090,7 @@ loreline_Lens.prototype = {
 	}
 	,findBeatCharacters: function(beatDecl) {
 		var _gthis = this;
-		var characters = new haxe_ds_IntMap();
+		var characters_map = new loreline_Int64Map();
 		this.traverse(beatDecl,function(node,parent) {
 			switch(js_Boot.getClass(node)) {
 			case loreline_NAccess:
@@ -2736,7 +3100,8 @@ loreline_Lens.prototype = {
 					if(character != null) {
 						var key = character.id;
 						var value = new loreline_Reference(character,access);
-						characters.h[key] = value;
+						var key1 = key;
+						characters_map._set(key1.high,key1.low,value);
 					}
 				}
 				break;
@@ -2746,7 +3111,8 @@ loreline_Lens.prototype = {
 				if(character != null) {
 					var key = character.id;
 					var value = new loreline_Reference(character,dialogue);
-					characters.h[key] = value;
+					var key1 = key;
+					characters_map._set(key1.high,key1.low,value);
 				}
 				break;
 			default:
@@ -2754,10 +3120,15 @@ loreline_Lens.prototype = {
 			return true;
 		});
 		var _g = [];
-		var ref = characters.iterator();
-		while(ref.hasNext()) {
-			var ref1 = ref.next();
-			_g.push(ref1);
+		var _g_map = characters_map;
+		var _g_index = 0;
+		while(_g_index < _g_map._values.length && _g_map._values[_g_index] == null) ++_g_index;
+		while(_g_index < _g_map._values.length) {
+			var v = _g_map._values[_g_index];
+			++_g_index;
+			while(_g_index < _g_map._values.length && _g_map._values[_g_index] == null) ++_g_index;
+			var ref = v;
+			_g.push(ref);
 		}
 		var refs = _g;
 		refs.sort(function(a,b) {
@@ -2775,7 +3146,7 @@ loreline_Lens.prototype = {
 	}
 	,findModifiedCharacterFields: function(beatDecl) {
 		var _gthis = this;
-		var used_h = { };
+		var used_map = new loreline_Int64Map();
 		var refs = [];
 		this.traverse(beatDecl,function(node,parent) {
 			if(js_Boot.getClass(node) == loreline_NAssign) {
@@ -2784,10 +3155,12 @@ loreline_Lens.prototype = {
 					var access = assign.target;
 					var resolved = _gthis.resolveAccess(access);
 					if(((resolved) instanceof loreline_NObjectField)) {
-						if(!used_h.hasOwnProperty(resolved.id)) {
+						var key = resolved.id;
+						if(!used_map._exists(key.high,key.low)) {
 							var parent = _gthis.getParentNode(resolved);
 							if(((parent) instanceof loreline_NCharacterDecl)) {
-								used_h[resolved.id] = true;
+								var key = resolved.id;
+								used_map._set(key.high,key.low,true);
 								refs.push(new loreline_Reference(resolved,node));
 							}
 						}
@@ -2800,7 +3173,7 @@ loreline_Lens.prototype = {
 	}
 	,findReadCharacterFields: function(beatDecl) {
 		var _gthis = this;
-		var used_h = { };
+		var used_map = new loreline_Int64Map();
 		var refs = [];
 		this.traverse(beatDecl,function(node,parent) {
 			if(js_Boot.getClass(node) == loreline_NAccess) {
@@ -2814,10 +3187,12 @@ loreline_Lens.prototype = {
 				}
 				var resolved = _gthis.resolveAccess(access);
 				if(((resolved) instanceof loreline_NObjectField)) {
-					if(!used_h.hasOwnProperty(resolved.id)) {
+					var key = resolved.id;
+					if(!used_map._exists(key.high,key.low)) {
 						var parent = _gthis.getParentNode(resolved);
 						if(((parent) instanceof loreline_NCharacterDecl)) {
-							used_h[resolved.id] = true;
+							var key = resolved.id;
+							used_map._set(key.high,key.low,true);
 							refs.push(new loreline_Reference(resolved,node));
 						}
 					}
@@ -2828,7 +3203,8 @@ loreline_Lens.prototype = {
 		return refs;
 	}
 	,traverse: function(node,callback) {
-		var children = this.childNodes.h[node.id];
+		var key = node.id;
+		var children = this.childNodes.map._get(key.high,key.low);
 		if(children != null) {
 			var _g = 0;
 			var _g1 = children.length;
@@ -2892,48 +3268,49 @@ var loreline_TokenType = $hxEnums["loreline.TokenType"] = { __ename__:true,__con
 	,KwIf: {_hx_name:"KwIf",_hx_index:5,__enum__:"loreline.TokenType",toString:$estr}
 	,KwElse: {_hx_name:"KwElse",_hx_index:6,__enum__:"loreline.TokenType",toString:$estr}
 	,KwNew: {_hx_name:"KwNew",_hx_index:7,__enum__:"loreline.TokenType",toString:$estr}
-	,LString: ($_=function(quotes,s,attachments) { return {_hx_index:8,quotes:quotes,s:s,attachments:attachments,__enum__:"loreline.TokenType",toString:$estr}; },$_._hx_name="LString",$_.__params__ = ["quotes","s","attachments"],$_)
-	,LNumber: ($_=function(n) { return {_hx_index:9,n:n,__enum__:"loreline.TokenType",toString:$estr}; },$_._hx_name="LNumber",$_.__params__ = ["n"],$_)
-	,LBoolean: ($_=function(b) { return {_hx_index:10,b:b,__enum__:"loreline.TokenType",toString:$estr}; },$_._hx_name="LBoolean",$_.__params__ = ["b"],$_)
-	,LNull: {_hx_name:"LNull",_hx_index:11,__enum__:"loreline.TokenType",toString:$estr}
-	,Identifier: ($_=function(name) { return {_hx_index:12,name:name,__enum__:"loreline.TokenType",toString:$estr}; },$_._hx_name="Identifier",$_.__params__ = ["name"],$_)
-	,OpAssign: {_hx_name:"OpAssign",_hx_index:13,__enum__:"loreline.TokenType",toString:$estr}
-	,OpPlusAssign: {_hx_name:"OpPlusAssign",_hx_index:14,__enum__:"loreline.TokenType",toString:$estr}
-	,OpMinusAssign: {_hx_name:"OpMinusAssign",_hx_index:15,__enum__:"loreline.TokenType",toString:$estr}
-	,OpMultiplyAssign: {_hx_name:"OpMultiplyAssign",_hx_index:16,__enum__:"loreline.TokenType",toString:$estr}
-	,OpDivideAssign: {_hx_name:"OpDivideAssign",_hx_index:17,__enum__:"loreline.TokenType",toString:$estr}
-	,OpPlus: {_hx_name:"OpPlus",_hx_index:18,__enum__:"loreline.TokenType",toString:$estr}
-	,OpMinus: {_hx_name:"OpMinus",_hx_index:19,__enum__:"loreline.TokenType",toString:$estr}
-	,OpMultiply: {_hx_name:"OpMultiply",_hx_index:20,__enum__:"loreline.TokenType",toString:$estr}
-	,OpDivide: {_hx_name:"OpDivide",_hx_index:21,__enum__:"loreline.TokenType",toString:$estr}
-	,OpModulo: {_hx_name:"OpModulo",_hx_index:22,__enum__:"loreline.TokenType",toString:$estr}
-	,OpEquals: {_hx_name:"OpEquals",_hx_index:23,__enum__:"loreline.TokenType",toString:$estr}
-	,OpNotEquals: {_hx_name:"OpNotEquals",_hx_index:24,__enum__:"loreline.TokenType",toString:$estr}
-	,OpGreater: {_hx_name:"OpGreater",_hx_index:25,__enum__:"loreline.TokenType",toString:$estr}
-	,OpLess: {_hx_name:"OpLess",_hx_index:26,__enum__:"loreline.TokenType",toString:$estr}
-	,OpGreaterEq: {_hx_name:"OpGreaterEq",_hx_index:27,__enum__:"loreline.TokenType",toString:$estr}
-	,OpLessEq: {_hx_name:"OpLessEq",_hx_index:28,__enum__:"loreline.TokenType",toString:$estr}
-	,OpAnd: ($_=function(word) { return {_hx_index:29,word:word,__enum__:"loreline.TokenType",toString:$estr}; },$_._hx_name="OpAnd",$_.__params__ = ["word"],$_)
-	,OpOr: ($_=function(word) { return {_hx_index:30,word:word,__enum__:"loreline.TokenType",toString:$estr}; },$_._hx_name="OpOr",$_.__params__ = ["word"],$_)
-	,OpNot: {_hx_name:"OpNot",_hx_index:31,__enum__:"loreline.TokenType",toString:$estr}
-	,Arrow: {_hx_name:"Arrow",_hx_index:32,__enum__:"loreline.TokenType",toString:$estr}
-	,Colon: {_hx_name:"Colon",_hx_index:33,__enum__:"loreline.TokenType",toString:$estr}
-	,Comma: {_hx_name:"Comma",_hx_index:34,__enum__:"loreline.TokenType",toString:$estr}
-	,Dot: {_hx_name:"Dot",_hx_index:35,__enum__:"loreline.TokenType",toString:$estr}
-	,LBrace: {_hx_name:"LBrace",_hx_index:36,__enum__:"loreline.TokenType",toString:$estr}
-	,RBrace: {_hx_name:"RBrace",_hx_index:37,__enum__:"loreline.TokenType",toString:$estr}
-	,LParen: {_hx_name:"LParen",_hx_index:38,__enum__:"loreline.TokenType",toString:$estr}
-	,RParen: {_hx_name:"RParen",_hx_index:39,__enum__:"loreline.TokenType",toString:$estr}
-	,LBracket: {_hx_name:"LBracket",_hx_index:40,__enum__:"loreline.TokenType",toString:$estr}
-	,RBracket: {_hx_name:"RBracket",_hx_index:41,__enum__:"loreline.TokenType",toString:$estr}
-	,CommentLine: ($_=function(content) { return {_hx_index:42,content:content,__enum__:"loreline.TokenType",toString:$estr}; },$_._hx_name="CommentLine",$_.__params__ = ["content"],$_)
-	,CommentMultiLine: ($_=function(content) { return {_hx_index:43,content:content,__enum__:"loreline.TokenType",toString:$estr}; },$_._hx_name="CommentMultiLine",$_.__params__ = ["content"],$_)
-	,Indent: {_hx_name:"Indent",_hx_index:44,__enum__:"loreline.TokenType",toString:$estr}
-	,Unindent: {_hx_name:"Unindent",_hx_index:45,__enum__:"loreline.TokenType",toString:$estr}
-	,LineBreak: {_hx_name:"LineBreak",_hx_index:46,__enum__:"loreline.TokenType",toString:$estr}
-	,Eof: {_hx_name:"Eof",_hx_index:47,__enum__:"loreline.TokenType",toString:$estr}
+	,Function: ($_=function(name,args,code) { return {_hx_index:8,name:name,args:args,code:code,__enum__:"loreline.TokenType",toString:$estr}; },$_._hx_name="Function",$_.__params__ = ["name","args","code"],$_)
+	,LString: ($_=function(quotes,s,attachments) { return {_hx_index:9,quotes:quotes,s:s,attachments:attachments,__enum__:"loreline.TokenType",toString:$estr}; },$_._hx_name="LString",$_.__params__ = ["quotes","s","attachments"],$_)
+	,LNumber: ($_=function(n) { return {_hx_index:10,n:n,__enum__:"loreline.TokenType",toString:$estr}; },$_._hx_name="LNumber",$_.__params__ = ["n"],$_)
+	,LBoolean: ($_=function(b) { return {_hx_index:11,b:b,__enum__:"loreline.TokenType",toString:$estr}; },$_._hx_name="LBoolean",$_.__params__ = ["b"],$_)
+	,LNull: {_hx_name:"LNull",_hx_index:12,__enum__:"loreline.TokenType",toString:$estr}
+	,Identifier: ($_=function(name) { return {_hx_index:13,name:name,__enum__:"loreline.TokenType",toString:$estr}; },$_._hx_name="Identifier",$_.__params__ = ["name"],$_)
+	,OpAssign: {_hx_name:"OpAssign",_hx_index:14,__enum__:"loreline.TokenType",toString:$estr}
+	,OpPlusAssign: {_hx_name:"OpPlusAssign",_hx_index:15,__enum__:"loreline.TokenType",toString:$estr}
+	,OpMinusAssign: {_hx_name:"OpMinusAssign",_hx_index:16,__enum__:"loreline.TokenType",toString:$estr}
+	,OpMultiplyAssign: {_hx_name:"OpMultiplyAssign",_hx_index:17,__enum__:"loreline.TokenType",toString:$estr}
+	,OpDivideAssign: {_hx_name:"OpDivideAssign",_hx_index:18,__enum__:"loreline.TokenType",toString:$estr}
+	,OpPlus: {_hx_name:"OpPlus",_hx_index:19,__enum__:"loreline.TokenType",toString:$estr}
+	,OpMinus: {_hx_name:"OpMinus",_hx_index:20,__enum__:"loreline.TokenType",toString:$estr}
+	,OpMultiply: {_hx_name:"OpMultiply",_hx_index:21,__enum__:"loreline.TokenType",toString:$estr}
+	,OpDivide: {_hx_name:"OpDivide",_hx_index:22,__enum__:"loreline.TokenType",toString:$estr}
+	,OpModulo: {_hx_name:"OpModulo",_hx_index:23,__enum__:"loreline.TokenType",toString:$estr}
+	,OpEquals: {_hx_name:"OpEquals",_hx_index:24,__enum__:"loreline.TokenType",toString:$estr}
+	,OpNotEquals: {_hx_name:"OpNotEquals",_hx_index:25,__enum__:"loreline.TokenType",toString:$estr}
+	,OpGreater: {_hx_name:"OpGreater",_hx_index:26,__enum__:"loreline.TokenType",toString:$estr}
+	,OpLess: {_hx_name:"OpLess",_hx_index:27,__enum__:"loreline.TokenType",toString:$estr}
+	,OpGreaterEq: {_hx_name:"OpGreaterEq",_hx_index:28,__enum__:"loreline.TokenType",toString:$estr}
+	,OpLessEq: {_hx_name:"OpLessEq",_hx_index:29,__enum__:"loreline.TokenType",toString:$estr}
+	,OpAnd: ($_=function(word) { return {_hx_index:30,word:word,__enum__:"loreline.TokenType",toString:$estr}; },$_._hx_name="OpAnd",$_.__params__ = ["word"],$_)
+	,OpOr: ($_=function(word) { return {_hx_index:31,word:word,__enum__:"loreline.TokenType",toString:$estr}; },$_._hx_name="OpOr",$_.__params__ = ["word"],$_)
+	,OpNot: {_hx_name:"OpNot",_hx_index:32,__enum__:"loreline.TokenType",toString:$estr}
+	,Arrow: {_hx_name:"Arrow",_hx_index:33,__enum__:"loreline.TokenType",toString:$estr}
+	,Colon: {_hx_name:"Colon",_hx_index:34,__enum__:"loreline.TokenType",toString:$estr}
+	,Comma: {_hx_name:"Comma",_hx_index:35,__enum__:"loreline.TokenType",toString:$estr}
+	,Dot: {_hx_name:"Dot",_hx_index:36,__enum__:"loreline.TokenType",toString:$estr}
+	,LBrace: {_hx_name:"LBrace",_hx_index:37,__enum__:"loreline.TokenType",toString:$estr}
+	,RBrace: {_hx_name:"RBrace",_hx_index:38,__enum__:"loreline.TokenType",toString:$estr}
+	,LParen: {_hx_name:"LParen",_hx_index:39,__enum__:"loreline.TokenType",toString:$estr}
+	,RParen: {_hx_name:"RParen",_hx_index:40,__enum__:"loreline.TokenType",toString:$estr}
+	,LBracket: {_hx_name:"LBracket",_hx_index:41,__enum__:"loreline.TokenType",toString:$estr}
+	,RBracket: {_hx_name:"RBracket",_hx_index:42,__enum__:"loreline.TokenType",toString:$estr}
+	,CommentLine: ($_=function(content) { return {_hx_index:43,content:content,__enum__:"loreline.TokenType",toString:$estr}; },$_._hx_name="CommentLine",$_.__params__ = ["content"],$_)
+	,CommentMultiLine: ($_=function(content) { return {_hx_index:44,content:content,__enum__:"loreline.TokenType",toString:$estr}; },$_._hx_name="CommentMultiLine",$_.__params__ = ["content"],$_)
+	,Indent: {_hx_name:"Indent",_hx_index:45,__enum__:"loreline.TokenType",toString:$estr}
+	,Unindent: {_hx_name:"Unindent",_hx_index:46,__enum__:"loreline.TokenType",toString:$estr}
+	,LineBreak: {_hx_name:"LineBreak",_hx_index:47,__enum__:"loreline.TokenType",toString:$estr}
+	,Eof: {_hx_name:"Eof",_hx_index:48,__enum__:"loreline.TokenType",toString:$estr}
 };
-loreline_TokenType.__constructs__ = [loreline_TokenType.KwImport,loreline_TokenType.KwState,loreline_TokenType.KwBeat,loreline_TokenType.KwCharacter,loreline_TokenType.KwChoice,loreline_TokenType.KwIf,loreline_TokenType.KwElse,loreline_TokenType.KwNew,loreline_TokenType.LString,loreline_TokenType.LNumber,loreline_TokenType.LBoolean,loreline_TokenType.LNull,loreline_TokenType.Identifier,loreline_TokenType.OpAssign,loreline_TokenType.OpPlusAssign,loreline_TokenType.OpMinusAssign,loreline_TokenType.OpMultiplyAssign,loreline_TokenType.OpDivideAssign,loreline_TokenType.OpPlus,loreline_TokenType.OpMinus,loreline_TokenType.OpMultiply,loreline_TokenType.OpDivide,loreline_TokenType.OpModulo,loreline_TokenType.OpEquals,loreline_TokenType.OpNotEquals,loreline_TokenType.OpGreater,loreline_TokenType.OpLess,loreline_TokenType.OpGreaterEq,loreline_TokenType.OpLessEq,loreline_TokenType.OpAnd,loreline_TokenType.OpOr,loreline_TokenType.OpNot,loreline_TokenType.Arrow,loreline_TokenType.Colon,loreline_TokenType.Comma,loreline_TokenType.Dot,loreline_TokenType.LBrace,loreline_TokenType.RBrace,loreline_TokenType.LParen,loreline_TokenType.RParen,loreline_TokenType.LBracket,loreline_TokenType.RBracket,loreline_TokenType.CommentLine,loreline_TokenType.CommentMultiLine,loreline_TokenType.Indent,loreline_TokenType.Unindent,loreline_TokenType.LineBreak,loreline_TokenType.Eof];
+loreline_TokenType.__constructs__ = [loreline_TokenType.KwImport,loreline_TokenType.KwState,loreline_TokenType.KwBeat,loreline_TokenType.KwCharacter,loreline_TokenType.KwChoice,loreline_TokenType.KwIf,loreline_TokenType.KwElse,loreline_TokenType.KwNew,loreline_TokenType.Function,loreline_TokenType.LString,loreline_TokenType.LNumber,loreline_TokenType.LBoolean,loreline_TokenType.LNull,loreline_TokenType.Identifier,loreline_TokenType.OpAssign,loreline_TokenType.OpPlusAssign,loreline_TokenType.OpMinusAssign,loreline_TokenType.OpMultiplyAssign,loreline_TokenType.OpDivideAssign,loreline_TokenType.OpPlus,loreline_TokenType.OpMinus,loreline_TokenType.OpMultiply,loreline_TokenType.OpDivide,loreline_TokenType.OpModulo,loreline_TokenType.OpEquals,loreline_TokenType.OpNotEquals,loreline_TokenType.OpGreater,loreline_TokenType.OpLess,loreline_TokenType.OpGreaterEq,loreline_TokenType.OpLessEq,loreline_TokenType.OpAnd,loreline_TokenType.OpOr,loreline_TokenType.OpNot,loreline_TokenType.Arrow,loreline_TokenType.Colon,loreline_TokenType.Comma,loreline_TokenType.Dot,loreline_TokenType.LBrace,loreline_TokenType.RBrace,loreline_TokenType.LParen,loreline_TokenType.RParen,loreline_TokenType.LBracket,loreline_TokenType.RBracket,loreline_TokenType.CommentLine,loreline_TokenType.CommentMultiLine,loreline_TokenType.Indent,loreline_TokenType.Unindent,loreline_TokenType.LineBreak,loreline_TokenType.Eof];
 var loreline_TokenTypeHelpers = function() { };
 loreline_TokenTypeHelpers.__name__ = "loreline.TokenTypeHelpers";
 loreline_TokenTypeHelpers.equals = function(a,b) {
@@ -2987,10 +3364,10 @@ loreline_TokenTypeHelpers.equals = function(a,b) {
 			return Type.enumEq(a,b);
 		}
 		break;
-	case 8:
+	case 9:
 		var _g = a.s;
 		var _g = a.attachments;
-		if(b._hx_index == 8) {
+		if(b._hx_index == 9) {
 			var _g = b.s;
 			var _g = b.attachments;
 			var s2 = b.quotes;
@@ -3000,8 +3377,8 @@ loreline_TokenTypeHelpers.equals = function(a,b) {
 			return Type.enumEq(a,b);
 		}
 		break;
-	case 9:
-		if(b._hx_index == 9) {
+	case 10:
+		if(b._hx_index == 10) {
 			var n2 = b.n;
 			var n1 = a.n;
 			return n1 == n2;
@@ -3009,8 +3386,8 @@ loreline_TokenTypeHelpers.equals = function(a,b) {
 			return Type.enumEq(a,b);
 		}
 		break;
-	case 10:
-		if(b._hx_index == 10) {
+	case 11:
+		if(b._hx_index == 11) {
 			var b2 = b.b;
 			var b1 = a.b;
 			return b1 == b2;
@@ -3018,25 +3395,18 @@ loreline_TokenTypeHelpers.equals = function(a,b) {
 			return Type.enumEq(a,b);
 		}
 		break;
-	case 11:
-		if(b._hx_index == 11) {
-			return true;
-		} else {
-			return Type.enumEq(a,b);
-		}
-		break;
 	case 12:
 		if(b._hx_index == 12) {
-			var n2 = b.name;
-			var n1 = a.name;
-			return n1 == n2;
+			return true;
 		} else {
 			return Type.enumEq(a,b);
 		}
 		break;
 	case 13:
 		if(b._hx_index == 13) {
-			return true;
+			var n2 = b.name;
+			var n1 = a.name;
+			return n1 == n2;
 		} else {
 			return Type.enumEq(a,b);
 		}
@@ -3147,9 +3517,7 @@ loreline_TokenTypeHelpers.equals = function(a,b) {
 		}
 		break;
 	case 29:
-		var _g = a.word;
 		if(b._hx_index == 29) {
-			var _g = b.word;
 			return true;
 		} else {
 			return Type.enumEq(a,b);
@@ -3165,7 +3533,9 @@ loreline_TokenTypeHelpers.equals = function(a,b) {
 		}
 		break;
 	case 31:
+		var _g = a.word;
 		if(b._hx_index == 31) {
+			var _g = b.word;
 			return true;
 		} else {
 			return Type.enumEq(a,b);
@@ -3185,8 +3555,8 @@ loreline_TokenTypeHelpers.equals = function(a,b) {
 			return Type.enumEq(a,b);
 		}
 		break;
-	case 35:
-		if(b._hx_index == 35) {
+	case 34:
+		if(b._hx_index == 34) {
 			return true;
 		} else {
 			return Type.enumEq(a,b);
@@ -3236,9 +3606,7 @@ loreline_TokenTypeHelpers.equals = function(a,b) {
 		break;
 	case 42:
 		if(b._hx_index == 42) {
-			var c2 = b.content;
-			var c1 = a.content;
-			return c1 == c2;
+			return true;
 		} else {
 			return Type.enumEq(a,b);
 		}
@@ -3254,7 +3622,9 @@ loreline_TokenTypeHelpers.equals = function(a,b) {
 		break;
 	case 44:
 		if(b._hx_index == 44) {
-			return true;
+			var c2 = b.content;
+			var c1 = a.content;
+			return c1 == c2;
 		} else {
 			return Type.enumEq(a,b);
 		}
@@ -3280,16 +3650,23 @@ loreline_TokenTypeHelpers.equals = function(a,b) {
 			return Type.enumEq(a,b);
 		}
 		break;
+	case 48:
+		if(b._hx_index == 48) {
+			return true;
+		} else {
+			return Type.enumEq(a,b);
+		}
+		break;
 	default:
 		return Type.enumEq(a,b);
 	}
 };
 loreline_TokenTypeHelpers.isComment = function(a) {
 	switch(a._hx_index) {
-	case 42:
+	case 43:
 		var _g = a.content;
 		return true;
-	case 43:
+	case 44:
 		var _g = a.content;
 		return true;
 	default:
@@ -3298,14 +3675,14 @@ loreline_TokenTypeHelpers.isComment = function(a) {
 };
 loreline_TokenTypeHelpers.isAssignOp = function(a) {
 	switch(a._hx_index) {
-	case 13:case 14:case 15:case 16:case 17:
+	case 14:case 15:case 16:case 17:case 18:
 		return true;
 	default:
 		return false;
 	}
 };
 loreline_TokenTypeHelpers.isIdentifier = function(a) {
-	if(a._hx_index == 12) {
+	if(a._hx_index == 13) {
 		var _g = a.name;
 		return true;
 	} else {
@@ -3434,7 +3811,7 @@ loreline_Lexer.prototype = {
 			case 4:
 				this.nextBlock = 1;
 				break;
-			case 36:
+			case 37:
 				var tmp;
 				switch(this.nextBlock) {
 				case 0:case 1:
@@ -3456,15 +3833,15 @@ loreline_Lexer.prototype = {
 				this.stack.push(tmp);
 				this.nextBlock = 8;
 				break;
-			case 40:
+			case 41:
 				this.stack.push(10);
 				this.nextBlock = 8;
 				break;
-			case 37:case 41:case 45:
+			case 38:case 42:case 46:
 				this.stack.pop();
 				this.nextBlock = 8;
 				break;
-			case 44:
+			case 45:
 				var tmp1;
 				switch(this.nextBlock) {
 				case 0:case 1:
@@ -5123,7 +5500,7 @@ loreline_Lexer.prototype = {
 		}
 		return HxOverrides.substr(this.input,pos,identifierLength);
 	}
-	,skipWhitespaceAndComments: function(pos) {
+	,_skipWhitespaceAndComments: function(pos) {
 		var startPos = pos;
 		var foundContent = false;
 		while(pos < this.length) {
@@ -5166,7 +5543,7 @@ loreline_Lexer.prototype = {
 	}
 	,isIfStart: function(pos) {
 		var _gthis = this;
-		pos = this.skipWhitespaceAndComments(pos);
+		pos = this._skipWhitespaceAndComments(pos);
 		if(HxOverrides.cca(this.input,pos) != 105) {
 			return false;
 		}
@@ -5175,10 +5552,10 @@ loreline_Lexer.prototype = {
 			return false;
 		}
 		var startPos = ++pos;
-		pos = this.skipWhitespaceAndComments(pos);
+		pos = this._skipWhitespaceAndComments(pos);
 		if(pos < this.length && HxOverrides.cca(this.input,pos) == 33) {
 			++pos;
-			pos = this.skipWhitespaceAndComments(pos);
+			pos = this._skipWhitespaceAndComments(pos);
 		}
 		if(HxOverrides.cca(this.input,pos) == 40) {
 			return true;
@@ -5252,14 +5629,14 @@ loreline_Lexer.prototype = {
 					return false;
 				}
 			}
-			pos = this.skipWhitespaceAndComments(pos);
+			pos = this._skipWhitespaceAndComments(pos);
 			if(pos >= this.length) {
 				return true;
 			}
 			var c3 = HxOverrides.cca(this.input,pos);
 			if(c3 == 46) {
 				++pos;
-				pos = this.skipWhitespaceAndComments(pos);
+				pos = this._skipWhitespaceAndComments(pos);
 				var result1 = true;
 				var len1 = _gthis.length;
 				if(pos >= len1) {
@@ -5304,7 +5681,7 @@ loreline_Lexer.prototype = {
 				if(!result1) {
 					return true;
 				}
-				pos = this.skipWhitespaceAndComments(pos);
+				pos = this._skipWhitespaceAndComments(pos);
 				if(pos >= this.length) {
 					return true;
 				}
@@ -5323,7 +5700,7 @@ loreline_Lexer.prototype = {
 					}
 					++pos;
 				}
-				pos = this.skipWhitespaceAndComments(pos);
+				pos = this._skipWhitespaceAndComments(pos);
 				if(pos >= this.length) {
 					return true;
 				}
@@ -5362,8 +5739,8 @@ loreline_Lexer.prototype = {
 	}
 	,isIdentifierExpressionStart: function(pos) {
 		var _gthis = this;
-		pos = this.skipWhitespaceAndComments(pos);
-		pos = this.skipWhitespaceAndComments(pos);
+		pos = this._skipWhitespaceAndComments(pos);
+		pos = this._skipWhitespaceAndComments(pos);
 		if(pos >= this.length) {
 			return false;
 		}
@@ -5392,7 +5769,7 @@ loreline_Lexer.prototype = {
 			return false;
 		}
 		while(pos < this.length) {
-			pos = this.skipWhitespaceAndComments(pos);
+			pos = this._skipWhitespaceAndComments(pos);
 			if(pos >= this.length) {
 				return true;
 			}
@@ -5405,7 +5782,7 @@ loreline_Lexer.prototype = {
 			}
 			if(c == 46) {
 				++pos;
-				pos = this.skipWhitespaceAndComments(pos);
+				pos = this._skipWhitespaceAndComments(pos);
 				if(pos >= this.length) {
 					return true;
 				}
@@ -5456,50 +5833,49 @@ loreline_Lexer.prototype = {
 		return true;
 	}
 	,isTransitionStart: function(pos) {
-		var startPos = pos;
 		if(HxOverrides.cca(this.input,pos) != 45 || pos >= this.length - 1 || HxOverrides.cca(this.input,pos + 1) != 62) {
 			return false;
 		}
 		pos += 2;
-		pos = this.skipWhitespaceAndComments(pos);
-		var tmp;
-		if(pos < this.length) {
-			var c = HxOverrides.cca(this.input,pos);
-			tmp = !(c >= 97 && c <= 122 || c >= 65 && c <= 90 || c == 95);
-		} else {
-			tmp = true;
-		}
-		if(tmp) {
-			pos = startPos;
+		pos = this._skipWhitespaceAndComments(pos);
+		if(pos >= this.length) {
 			return false;
 		}
-		++pos;
-		while(true) {
-			var tmp;
-			if(pos < this.length) {
-				var c = HxOverrides.cca(this.input,pos);
-				tmp = c >= 97 && c <= 122 || c >= 65 && c <= 90 || c == 95 || c >= 48 && c <= 57;
-			} else {
-				tmp = false;
-			}
-			if(!tmp) {
-				break;
-			}
+		var char = HxOverrides.cca(this.input,pos);
+		if(char == 46) {
 			++pos;
-		}
-		pos = this.skipWhitespaceAndComments(pos);
-		if(pos < this.length) {
+		} else {
 			var c = HxOverrides.cca(this.input,pos);
-			if(c != 10 && c != 13 && c != 32 && c != 9 && c != 47) {
-				pos = startPos;
+			if(c >= 97 && c <= 122 || c >= 65 && c <= 90 || c == 95 || c >= 48 && c <= 57) {
+				++pos;
+				while(true) {
+					var tmp;
+					if(pos < this.length) {
+						var c = HxOverrides.cca(this.input,pos);
+						tmp = c >= 97 && c <= 122 || c >= 65 && c <= 90 || c == 95 || c >= 48 && c <= 57;
+					} else {
+						tmp = false;
+					}
+					if(!tmp) {
+						break;
+					}
+					++pos;
+				}
+			} else {
 				return false;
 			}
 		}
-		pos = startPos;
+		pos = this._skipWhitespaceAndComments(pos);
+		if(pos < this.length) {
+			var c = HxOverrides.cca(this.input,pos);
+			if(c != 10 && c != 13 && c != 32 && c != 9 && c != 47) {
+				return false;
+			}
+		}
 		return true;
 	}
 	,isLabelStart: function(pos) {
-		pos = this.skipWhitespaceAndComments(pos);
+		pos = this._skipWhitespaceAndComments(pos);
 		var c = HxOverrides.cca(this.input,pos);
 		if(!(c >= 97 && c <= 122 || c >= 65 && c <= 90 || c == 95)) {
 			return false;
@@ -5567,7 +5943,7 @@ loreline_Lexer.prototype = {
 			return false;
 		}
 		while(pos < this.length) {
-			pos = this.skipWhitespaceAndComments(pos);
+			pos = this._skipWhitespaceAndComments(pos);
 			if(pos >= this.length) {
 				pos = startPos;
 				return false;
@@ -5579,7 +5955,7 @@ loreline_Lexer.prototype = {
 			}
 			if(c == 46) {
 				++pos;
-				pos = this.skipWhitespaceAndComments(pos);
+				pos = this._skipWhitespaceAndComments(pos);
 				var result = true;
 				if(pos >= _gthis.length) {
 					result = false;
@@ -5647,7 +6023,7 @@ loreline_Lexer.prototype = {
 			return false;
 		}
 		while(pos < this.length) {
-			pos = this.skipWhitespaceAndComments(pos);
+			pos = this._skipWhitespaceAndComments(pos);
 			if(pos >= this.length) {
 				pos = startPos;
 				return false;
@@ -5659,7 +6035,7 @@ loreline_Lexer.prototype = {
 			}
 			if(c == 46) {
 				++pos;
-				pos = this.skipWhitespaceAndComments(pos);
+				pos = this._skipWhitespaceAndComments(pos);
 				var result = true;
 				if(pos >= _gthis.length) {
 					result = false;
@@ -5885,20 +6261,20 @@ loreline_Lexer.prototype = {
 			var token = this.tokenized[i];
 			var _g = token.type;
 			switch(_g._hx_index) {
-			case 12:
+			case 13:
 				var _g1 = _g.name;
 				this.strictExprs.push(1);
 				return;
-			case 39:case 41:
+			case 40:case 42:
 				this.strictExprs.push(1);
 				return;
-			case 42:
+			case 43:
 				var _g2 = _g.content;
 				break;
-			case 43:
+			case 44:
 				var _g3 = _g.content;
 				break;
-			case 44:case 45:case 46:
+			case 45:case 46:case 47:
 				break;
 			default:
 				this.strictExprs.push(0);
@@ -5921,18 +6297,18 @@ loreline_Lexer.prototype = {
 			var token = this.tokenized[i];
 			var _g = token.type;
 			switch(_g._hx_index) {
-			case 12:
+			case 13:
 				var _g1 = _g.name;
 				return true;
-			case 39:case 41:
+			case 40:case 42:
 				return true;
-			case 42:
+			case 43:
 				var _g2 = _g.content;
 				break;
-			case 43:
+			case 44:
 				var _g3 = _g.content;
 				break;
-			case 44:case 45:case 46:
+			case 45:case 46:case 47:
 				break;
 			default:
 				return false;
@@ -5971,12 +6347,13 @@ loreline_Lexer.prototype = {
 		}
 		var inBrackets = this.isInsideBrackets();
 		var isAssignValue = this.followsAssignStart();
+		var isAfterLabel = this.isAfterLabel();
 		var isValue = parent == loreline_TokenType.KwState || parent == loreline_TokenType.KwCharacter || inBrackets || isAssignValue;
 		if(isValue) {
 			if(this.isCallStart(this.pos) || this.isLabelStart(this.pos)) {
 				return null;
 			}
-		} else if(this.isIdentifierExpressionStart(this.pos) || this.isIfStart(this.pos) || this.isCallStart(this.pos) || this.isAssignStart(this.pos)) {
+		} else if(!isAfterLabel && (this.isIdentifierExpressionStart(this.pos) || this.isIfStart(this.pos) || this.isCallStart(this.pos) || this.isAssignStart(this.pos))) {
 			return null;
 		}
 		if(!isValue) {
@@ -5986,6 +6363,9 @@ loreline_Lexer.prototype = {
 		}
 		var identifier = this.matchIdentifier(this.pos);
 		if(identifier != null) {
+			if(identifier == "function") {
+				return null;
+			}
 			if(!isValue) {
 				if(identifier != "if" && identifier != "null" && identifier != "true" && identifier != "false" && Object.prototype.hasOwnProperty.call(loreline_Lexer.KEYWORDS.h,identifier)) {
 					return null;
@@ -5999,10 +6379,10 @@ loreline_Lexer.prototype = {
 		var isDialogue = false;
 		if(isValue) {
 			if(inBrackets) {
-				if(!this.followsOnlyWhitespacesOrCommentsInLine() && !this.isAfterComma() && !this.isAfterLBracket() && !this.isAfterLabel()) {
+				if(!isAfterLabel && !this.followsOnlyWhitespacesOrCommentsInLine() && !this.isAfterComma() && !this.isAfterLBracket()) {
 					return null;
 				}
-			} else if(!isAssignValue && !this.isAfterLabel()) {
+			} else if(!isAssignValue && !isAfterLabel) {
 				return null;
 			}
 		} else {
@@ -6452,17 +6832,17 @@ loreline_Lexer.prototype = {
 				var tokenLength;
 				var _g = token.type;
 				switch(_g._hx_index) {
-				case 8:
+				case 9:
 					var _g1 = _g.attachments;
 					var q = _g.quotes;
 					var s = _g.s;
 					tokenLength = s.length + (q != 0 ? 2 : 0);
 					break;
-				case 9:
+				case 10:
 					var n = _g.n;
 					tokenLength = (n == null ? "null" : "" + n).length;
 					break;
-				case 12:
+				case 13:
 					var name = _g.name;
 					tokenLength = name.length;
 					break;
@@ -6472,10 +6852,10 @@ loreline_Lexer.prototype = {
 				currentColumn += tokenLength;
 			}
 			switch(token.type._hx_index) {
-			case 36:
+			case 37:
 				++braceLevel;
 				break;
-			case 37:
+			case 38:
 				--braceLevel;
 				break;
 			default:
@@ -6899,6 +7279,9 @@ loreline_Lexer.prototype = {
 			}
 		}
 		var word = HxOverrides.substr(this.input,startPos,this.pos - startPos);
+		if(word == "function") {
+			return this.readFunction(start);
+		}
 		var tokenType = Object.prototype.hasOwnProperty.call(loreline_Lexer.KEYWORDS.h,word) ? loreline_Lexer.KEYWORDS.h[word] : loreline_TokenType.Identifier(word);
 		var position = start;
 		if(position == null) {
@@ -6908,6 +7291,518 @@ loreline_Lexer.prototype = {
 		var token = new loreline_Token(tokenType,position);
 		this.previous = token;
 		return token;
+	}
+	,readFunction: function(start) {
+		var newPos = this._skipWhitespaceAndComments(this.pos);
+		while(this.pos < newPos) {
+			var count = 1;
+			while(count-- > 0 && this.pos < this.length) {
+				if(HxOverrides.cca(this.input,this.pos) == 10) {
+					this.line++;
+					this.column = 1;
+				} else {
+					this.column++;
+				}
+				this.pos++;
+			}
+		}
+		var name = null;
+		var c = HxOverrides.cca(this.input,this.pos);
+		if(c >= 97 && c <= 122 || c >= 65 && c <= 90 || c == 95) {
+			var nameStart = this.pos;
+			while(true) {
+				var tmp;
+				if(this.pos < this.length) {
+					var c = HxOverrides.cca(this.input,this.pos);
+					tmp = c >= 97 && c <= 122 || c >= 65 && c <= 90 || c == 95 || c >= 48 && c <= 57;
+				} else {
+					tmp = false;
+				}
+				if(!tmp) {
+					break;
+				}
+				var count = 1;
+				while(count-- > 0 && this.pos < this.length) {
+					if(HxOverrides.cca(this.input,this.pos) == 10) {
+						this.line++;
+						this.column = 1;
+					} else {
+						this.column++;
+					}
+					this.pos++;
+				}
+			}
+			name = HxOverrides.substr(this.input,nameStart,this.pos - nameStart);
+		}
+		var newPos = this._skipWhitespaceAndComments(this.pos);
+		while(this.pos < newPos) {
+			var count = 1;
+			while(count-- > 0 && this.pos < this.length) {
+				if(HxOverrides.cca(this.input,this.pos) == 10) {
+					this.line++;
+					this.column = 1;
+				} else {
+					this.column++;
+				}
+				this.pos++;
+			}
+		}
+		if(this.pos >= this.length || HxOverrides.cca(this.input,this.pos) != 40) {
+			this.error("Expected opening parenthesis after function name",true);
+		}
+		var parenLevel = 0;
+		var args = [];
+		var count = 1;
+		while(count-- > 0 && this.pos < this.length) {
+			if(HxOverrides.cca(this.input,this.pos) == 10) {
+				this.line++;
+				this.column = 1;
+			} else {
+				this.column++;
+			}
+			this.pos++;
+		}
+		parenLevel = 1;
+		var currentArg = new StringBuf();
+		while(this.pos < this.length && parenLevel > 0) {
+			var c = HxOverrides.cca(this.input,this.pos);
+			if(c == 47) {
+				var prevPos = this.pos;
+				var newPos = this._skipWhitespaceAndComments(this.pos);
+				while(this.pos < newPos) {
+					var count = 1;
+					while(count-- > 0 && this.pos < this.length) {
+						if(HxOverrides.cca(this.input,this.pos) == 10) {
+							this.line++;
+							this.column = 1;
+						} else {
+							this.column++;
+						}
+						this.pos++;
+					}
+				}
+				if(this.pos == prevPos) {
+					var count1 = 1;
+					while(count1-- > 0 && this.pos < this.length) {
+						if(HxOverrides.cca(this.input,this.pos) == 10) {
+							this.line++;
+							this.column = 1;
+						} else {
+							this.column++;
+						}
+						this.pos++;
+					}
+					this.error("Invalid character \"/\"",false);
+				}
+			} else if(c == 40) {
+				++parenLevel;
+				currentArg.b += String.fromCodePoint(c);
+				var count2 = 1;
+				while(count2-- > 0 && this.pos < this.length) {
+					if(HxOverrides.cca(this.input,this.pos) == 10) {
+						this.line++;
+						this.column = 1;
+					} else {
+						this.column++;
+					}
+					this.pos++;
+				}
+				var newPos1 = this._skipWhitespaceAndComments(this.pos);
+				while(this.pos < newPos1) {
+					var count3 = 1;
+					while(count3-- > 0 && this.pos < this.length) {
+						if(HxOverrides.cca(this.input,this.pos) == 10) {
+							this.line++;
+							this.column = 1;
+						} else {
+							this.column++;
+						}
+						this.pos++;
+					}
+				}
+			} else if(c == 41) {
+				--parenLevel;
+				if(parenLevel > 0) {
+					currentArg.b += String.fromCodePoint(c);
+				} else {
+					var argStr = StringTools.trim(currentArg.b);
+					if(argStr.length > 0) {
+						args.push(argStr);
+					}
+				}
+				var count4 = 1;
+				while(count4-- > 0 && this.pos < this.length) {
+					if(HxOverrides.cca(this.input,this.pos) == 10) {
+						this.line++;
+						this.column = 1;
+					} else {
+						this.column++;
+					}
+					this.pos++;
+				}
+				var newPos2 = this._skipWhitespaceAndComments(this.pos);
+				while(this.pos < newPos2) {
+					var count5 = 1;
+					while(count5-- > 0 && this.pos < this.length) {
+						if(HxOverrides.cca(this.input,this.pos) == 10) {
+							this.line++;
+							this.column = 1;
+						} else {
+							this.column++;
+						}
+						this.pos++;
+					}
+				}
+			} else if(c == 44 && parenLevel == 1) {
+				var argStr1 = StringTools.trim(currentArg.b);
+				if(argStr1.length > 0) {
+					args.push(argStr1);
+				}
+				currentArg = new StringBuf();
+				var count6 = 1;
+				while(count6-- > 0 && this.pos < this.length) {
+					if(HxOverrides.cca(this.input,this.pos) == 10) {
+						this.line++;
+						this.column = 1;
+					} else {
+						this.column++;
+					}
+					this.pos++;
+				}
+				var newPos3 = this._skipWhitespaceAndComments(this.pos);
+				while(this.pos < newPos3) {
+					var count7 = 1;
+					while(count7-- > 0 && this.pos < this.length) {
+						if(HxOverrides.cca(this.input,this.pos) == 10) {
+							this.line++;
+							this.column = 1;
+						} else {
+							this.column++;
+						}
+						this.pos++;
+					}
+				}
+			} else {
+				currentArg.b += String.fromCodePoint(c);
+				var count8 = 1;
+				while(count8-- > 0 && this.pos < this.length) {
+					if(HxOverrides.cca(this.input,this.pos) == 10) {
+						this.line++;
+						this.column = 1;
+					} else {
+						this.column++;
+					}
+					this.pos++;
+				}
+			}
+		}
+		if(parenLevel > 0) {
+			this.error("Unclosed parentheses in function declaration",false);
+		}
+		var newPos = this._skipWhitespaceAndComments(this.pos);
+		while(this.pos < newPos) {
+			var count = 1;
+			while(count-- > 0 && this.pos < this.length) {
+				if(HxOverrides.cca(this.input,this.pos) == 10) {
+					this.line++;
+					this.column = 1;
+				} else {
+					this.column++;
+				}
+				this.pos++;
+			}
+		}
+		var usesBraces = this.pos < this.length && HxOverrides.cca(this.input,this.pos) == 123;
+		if(usesBraces) {
+			var count = 1;
+			while(count-- > 0 && this.pos < this.length) {
+				if(HxOverrides.cca(this.input,this.pos) == 10) {
+					this.line++;
+					this.column = 1;
+				} else {
+					this.column++;
+				}
+				this.pos++;
+			}
+			var braceLevel = 1;
+			while(this.pos < this.length && braceLevel > 0) {
+				var c = HxOverrides.cca(this.input,this.pos);
+				if(c == 34) {
+					var count = 1;
+					while(count-- > 0 && this.pos < this.length) {
+						if(HxOverrides.cca(this.input,this.pos) == 10) {
+							this.line++;
+							this.column = 1;
+						} else {
+							this.column++;
+						}
+						this.pos++;
+					}
+					this.skipQuotedString();
+					continue;
+				}
+				if(c == 123) {
+					++braceLevel;
+				} else if(c == 125) {
+					--braceLevel;
+				}
+				var count1 = 1;
+				while(count1-- > 0 && this.pos < this.length) {
+					if(HxOverrides.cca(this.input,this.pos) == 10) {
+						this.line++;
+						this.column = 1;
+					} else {
+						this.column++;
+					}
+					this.pos++;
+				}
+			}
+			if(braceLevel > 0) {
+				this.error("Unclosed braces in function body",false);
+			}
+		} else {
+			var functionIndentLevel = -1;
+			var currentLine = true;
+			while(this.pos < this.length) {
+				var c = HxOverrides.cca(this.input,this.pos);
+				if(c == 10 || c == 13) {
+					var count = 1;
+					while(count-- > 0 && this.pos < this.length) {
+						if(HxOverrides.cca(this.input,this.pos) == 10) {
+							this.line++;
+							this.column = 1;
+						} else {
+							this.column++;
+						}
+						this.pos++;
+					}
+					currentLine = true;
+					break;
+				}
+				var count1 = 1;
+				while(count1-- > 0 && this.pos < this.length) {
+					if(HxOverrides.cca(this.input,this.pos) == 10) {
+						this.line++;
+						this.column = 1;
+					} else {
+						this.column++;
+					}
+					this.pos++;
+				}
+			}
+			while(this.pos < this.length) {
+				if(currentLine) {
+					var indent = 0;
+					var indentStart = this.pos;
+					while(this.pos < this.length) {
+						var c = HxOverrides.cca(this.input,this.pos);
+						if(c == 32) {
+							++indent;
+						} else if(c == 9) {
+							indent += 4;
+						} else {
+							break;
+						}
+						var count = 1;
+						while(count-- > 0 && this.pos < this.length) {
+							if(HxOverrides.cca(this.input,this.pos) == 10) {
+								this.line++;
+								this.column = 1;
+							} else {
+								this.column++;
+							}
+							this.pos++;
+						}
+					}
+					if(functionIndentLevel == -1 && this.pos < this.length && HxOverrides.cca(this.input,this.pos) != 10 && HxOverrides.cca(this.input,this.pos) != 13) {
+						functionIndentLevel = indent;
+					} else if(functionIndentLevel != -1 && indent < functionIndentLevel && (this.pos >= this.length || HxOverrides.cca(this.input,this.pos) != 10 && HxOverrides.cca(this.input,this.pos) != 13)) {
+						this.pos = indentStart;
+						break;
+					}
+					currentLine = false;
+				}
+				var c1 = HxOverrides.cca(this.input,this.pos);
+				if(c1 == 34) {
+					this.skipQuotedString();
+					continue;
+				}
+				if(c1 == 10 || c1 == 13) {
+					currentLine = true;
+				}
+				var count1 = 1;
+				while(count1-- > 0 && this.pos < this.length) {
+					if(HxOverrides.cca(this.input,this.pos) == 10) {
+						this.line++;
+						this.column = 1;
+					} else {
+						this.column++;
+					}
+					this.pos++;
+				}
+			}
+		}
+		var bodyEnd = this.pos;
+		var code = StringTools.rtrim(HxOverrides.substr(this.input,start.offset,bodyEnd - start.offset)) + "\n";
+		var position = start;
+		if(position == null) {
+			position = new loreline_Position(this.startLine,this.startColumn,this.pos);
+		}
+		position.length = this.pos - position.offset;
+		var token = new loreline_Token(loreline_TokenType.Function(name,args,code),position);
+		this.previous = token;
+		var token1 = token;
+		token1.pos.length = code.length;
+		return token1;
+	}
+	,skipQuotedString: function() {
+		var escaped = false;
+		var count = 1;
+		while(count-- > 0 && this.pos < this.length) {
+			if(HxOverrides.cca(this.input,this.pos) == 10) {
+				this.line++;
+				this.column = 1;
+			} else {
+				this.column++;
+			}
+			this.pos++;
+		}
+		while(this.pos < this.length) {
+			var c = HxOverrides.cca(this.input,this.pos);
+			if(escaped) {
+				escaped = false;
+				var count = 1;
+				while(count-- > 0 && this.pos < this.length) {
+					if(HxOverrides.cca(this.input,this.pos) == 10) {
+						this.line++;
+						this.column = 1;
+					} else {
+						this.column++;
+					}
+					this.pos++;
+				}
+			} else if(c == 92) {
+				escaped = true;
+				var count1 = 1;
+				while(count1-- > 0 && this.pos < this.length) {
+					if(HxOverrides.cca(this.input,this.pos) == 10) {
+						this.line++;
+						this.column = 1;
+					} else {
+						this.column++;
+					}
+					this.pos++;
+				}
+			} else if(c == 34) {
+				var count2 = 1;
+				while(count2-- > 0 && this.pos < this.length) {
+					if(HxOverrides.cca(this.input,this.pos) == 10) {
+						this.line++;
+						this.column = 1;
+					} else {
+						this.column++;
+					}
+					this.pos++;
+				}
+				break;
+			} else if(c == 36 && this.pos + 1 < this.length) {
+				var count3 = 1;
+				while(count3-- > 0 && this.pos < this.length) {
+					if(HxOverrides.cca(this.input,this.pos) == 10) {
+						this.line++;
+						this.column = 1;
+					} else {
+						this.column++;
+					}
+					this.pos++;
+				}
+				if(this.pos < this.length && HxOverrides.cca(this.input,this.pos) == 123) {
+					var count4 = 1;
+					while(count4-- > 0 && this.pos < this.length) {
+						if(HxOverrides.cca(this.input,this.pos) == 10) {
+							this.line++;
+							this.column = 1;
+						} else {
+							this.column++;
+						}
+						this.pos++;
+					}
+					var interpBraceLevel = 1;
+					while(this.pos < this.length && interpBraceLevel > 0) {
+						var ic = HxOverrides.cca(this.input,this.pos);
+						if(ic == 34) {
+							this.skipQuotedString();
+							continue;
+						} else if(ic == 123) {
+							++interpBraceLevel;
+						} else if(ic == 125) {
+							--interpBraceLevel;
+						}
+						if(interpBraceLevel > 0 || ic != 125) {
+							var count5 = 1;
+							while(count5-- > 0 && this.pos < this.length) {
+								if(HxOverrides.cca(this.input,this.pos) == 10) {
+									this.line++;
+									this.column = 1;
+								} else {
+									this.column++;
+								}
+								this.pos++;
+							}
+						} else {
+							var count6 = 1;
+							while(count6-- > 0 && this.pos < this.length) {
+								if(HxOverrides.cca(this.input,this.pos) == 10) {
+									this.line++;
+									this.column = 1;
+								} else {
+									this.column++;
+								}
+								this.pos++;
+							}
+							break;
+						}
+					}
+				} else {
+					var c1 = HxOverrides.cca(this.input,this.pos);
+					if(c1 >= 97 && c1 <= 122 || c1 >= 65 && c1 <= 90 || c1 == 95) {
+						while(true) {
+							var tmp;
+							if(this.pos < this.length) {
+								var c2 = HxOverrides.cca(this.input,this.pos);
+								tmp = c2 >= 97 && c2 <= 122 || c2 >= 65 && c2 <= 90 || c2 == 95 || c2 >= 48 && c2 <= 57;
+							} else {
+								tmp = false;
+							}
+							if(!tmp) {
+								break;
+							}
+							var count7 = 1;
+							while(count7-- > 0 && this.pos < this.length) {
+								if(HxOverrides.cca(this.input,this.pos) == 10) {
+									this.line++;
+									this.column = 1;
+								} else {
+									this.column++;
+								}
+								this.pos++;
+							}
+						}
+					}
+				}
+			} else {
+				var count8 = 1;
+				while(count8-- > 0 && this.pos < this.length) {
+					if(HxOverrides.cca(this.input,this.pos) == 10) {
+						this.line++;
+						this.column = 1;
+					} else {
+						this.column++;
+					}
+					this.pos++;
+				}
+			}
+		}
 	}
 	,makePosition: function() {
 		return new loreline_Position(this.startLine,this.startColumn,this.pos);
@@ -7014,16 +7909,303 @@ loreline_Lexer.prototype = {
 	}
 	,__class__: loreline_Lexer
 };
+var loreline_NodeId = {};
+loreline_NodeId._new = function(section,branch,block,node) {
+	if(section < 0 || section > 65535) {
+		throw haxe_Exception.thrown("Section value (" + section + ") should be between 0 and " + 65535);
+	}
+	if(branch < 0 || branch > 65535) {
+		throw haxe_Exception.thrown("Branch value (" + branch + ") should be between 0 and " + 65535);
+	}
+	if(block < 0 || block > 65535) {
+		throw haxe_Exception.thrown("Block value (" + block + ") should be between 0 and " + 65535);
+	}
+	if(node < 0 || node > 65535) {
+		throw haxe_Exception.thrown("Node value (" + node + ") should be between 0 and " + 65535);
+	}
+	var high = section - 32768;
+	var low = branch - 32768;
+	if(high < 0) {
+		high = high + 65536 & 65535;
+	}
+	if(low < 0) {
+		low = low + 65536 & 65535;
+	}
+	var high1 = block - 32768;
+	var low1 = node - 32768;
+	if(high1 < 0) {
+		high1 = high1 + 65536 & 65535;
+	}
+	if(low1 < 0) {
+		low1 = low1 + 65536 & 65535;
+	}
+	return new haxe__$Int64__$_$_$Int64(high << 16 | low & 65535,high1 << 16 | low1 & 65535);
+};
+loreline_NodeId.fromInt64 = function(value) {
+	return value;
+};
+loreline_NodeId.fromString = function(str) {
+	var parts = str.split(".");
+	return loreline_NodeId._new(Std.parseInt(parts[0]),Std.parseInt(parts[1]),Std.parseInt(parts[2]),Std.parseInt(parts[3]));
+};
+loreline_NodeId.fromTwoInt32 = function(high,low) {
+	return loreline_NodeId.fromInt64(new haxe__$Int64__$_$_$Int64(high,low));
+};
+loreline_NodeId.packInt32 = function(high,low) {
+	if(high < 0) {
+		high = high + 65536 & 65535;
+	}
+	if(low < 0) {
+		low = low + 65536 & 65535;
+	}
+	return high << 16 | low & 65535;
+};
+loreline_NodeId.int32GetLow = function(value) {
+	var low = value & 65535;
+	if(low >= 32768) {
+		return low - 65536;
+	} else {
+		return low;
+	}
+};
+loreline_NodeId.int32SetLow = function(target,value) {
+	if(value < 0) {
+		value = value + 65536 & 65535;
+	}
+	return target & -65536 | value;
+};
+loreline_NodeId.int32GetHigh = function(value) {
+	var high = value >> 16 & 65535;
+	if(high >= 32768) {
+		return high - 65536;
+	} else {
+		return high;
+	}
+};
+loreline_NodeId.int32SetHigh = function(target,value) {
+	if(value < 0) {
+		value = value + 65536 & 65535;
+	}
+	return target & 65535 | value << 16;
+};
+loreline_NodeId.get_section = function(this1) {
+	var high = this1.high >> 16 & 65535;
+	return (high >= 32768 ? high - 65536 : high) + 32768;
+};
+loreline_NodeId.set_section = function(this1,section) {
+	var value = section - 32768;
+	if(value < 0) {
+		value = value + 65536 & 65535;
+	}
+	this1 = new haxe__$Int64__$_$_$Int64(this1.high & 65535 | value << 16,this1.low);
+	return section;
+};
+loreline_NodeId.get_branch = function(this1) {
+	var low = this1.high & 65535;
+	return (low >= 32768 ? low - 65536 : low) + 32768;
+};
+loreline_NodeId.set_branch = function(this1,branch) {
+	var value = branch - 32768;
+	if(value < 0) {
+		value = value + 65536 & 65535;
+	}
+	this1 = new haxe__$Int64__$_$_$Int64(this1.high & -65536 | value,this1.low);
+	return branch;
+};
+loreline_NodeId.get_block = function(this1) {
+	var high = this1.low >> 16 & 65535;
+	return (high >= 32768 ? high - 65536 : high) + 32768;
+};
+loreline_NodeId.set_block = function(this1,block) {
+	var value = block - 32768;
+	if(value < 0) {
+		value = value + 65536 & 65535;
+	}
+	this1 = new haxe__$Int64__$_$_$Int64(this1.high,this1.low & 65535 | value << 16);
+	return block;
+};
+loreline_NodeId.get_node = function(this1) {
+	var low = this1.low & 65535;
+	return (low >= 32768 ? low - 65536 : low) + 32768;
+};
+loreline_NodeId.set_node = function(this1,node) {
+	var value = node - 32768;
+	if(value < 0) {
+		value = value + 65536 & 65535;
+	}
+	this1 = new haxe__$Int64__$_$_$Int64(this1.high,this1.low & -65536 | value);
+	return node;
+};
+loreline_NodeId.nextSection = function(this1) {
+	var high = this1.high >> 16 & 65535;
+	var section = (high >= 32768 ? high - 65536 : high) + 32768;
+	if(section == 65535) {
+		throw haxe_Exception.thrown("Node id section overflow");
+	}
+	return loreline_NodeId._new(section + 1,0,0,0);
+};
+loreline_NodeId.nextBranch = function(this1) {
+	var low = this1.high & 65535;
+	var branch = (low >= 32768 ? low - 65536 : low) + 32768;
+	if(branch == 65535) {
+		return loreline_NodeId.nextSection(this1);
+	}
+	var high = this1.high >> 16 & 65535;
+	return loreline_NodeId._new((high >= 32768 ? high - 65536 : high) + 32768,branch + 1,0,0);
+};
+loreline_NodeId.nextBlock = function(this1) {
+	var high = this1.low >> 16 & 65535;
+	var block = (high >= 32768 ? high - 65536 : high) + 32768;
+	if(block == 65535) {
+		return loreline_NodeId.nextBranch(this1);
+	}
+	var high = this1.high >> 16 & 65535;
+	var low = this1.high & 65535;
+	return loreline_NodeId._new((high >= 32768 ? high - 65536 : high) + 32768,(low >= 32768 ? low - 65536 : low) + 32768,block + 1,0);
+};
+loreline_NodeId.nextNode = function(this1) {
+	var low = this1.low & 65535;
+	var node = (low >= 32768 ? low - 65536 : low) + 32768;
+	if(node == 65535) {
+		return loreline_NodeId.nextBlock(this1);
+	}
+	var high = this1.high >> 16 & 65535;
+	var low = this1.high & 65535;
+	var high1 = this1.low >> 16 & 65535;
+	return loreline_NodeId._new((high >= 32768 ? high - 65536 : high) + 32768,(low >= 32768 ? low - 65536 : low) + 32768,(high1 >= 32768 ? high1 - 65536 : high1) + 32768,node + 1);
+};
+loreline_NodeId.toInt64 = function(this1) {
+	return this1;
+};
+loreline_NodeId.toString = function(this1) {
+	var high = this1.high >> 16 & 65535;
+	var low = this1.high & 65535;
+	var high1 = this1.low >> 16 & 65535;
+	var low1 = this1.low & 65535;
+	return "" + ((high >= 32768 ? high - 65536 : high) + 32768) + "." + ((low >= 32768 ? low - 65536 : low) + 32768) + "." + ((high1 >= 32768 ? high1 - 65536 : high1) + 32768) + "." + ((low1 >= 32768 ? low1 - 65536 : low1) + 32768);
+};
+loreline_NodeId.equals = function(a,b) {
+	var a1 = a;
+	var b1 = b;
+	if(a1.high == b1.high) {
+		return a1.low == b1.low;
+	} else {
+		return false;
+	}
+};
+var loreline_NodeIdMap = function() {
+	this.map = new loreline_Int64Map();
+};
+loreline_NodeIdMap.__name__ = "loreline.NodeIdMap";
+loreline_NodeIdMap.prototype = {
+	get: function(key) {
+		var key1 = key;
+		return this.map._get(key1.high,key1.low);
+	}
+	,set: function(key,value) {
+		var key1 = key;
+		this.map._set(key1.high,key1.low,value);
+	}
+	,remove: function(key) {
+		var key1 = key;
+		this.map._remove(key1.high,key1.low);
+	}
+	,exists: function(key) {
+		var key1 = key;
+		return this.map._exists(key1.high,key1.low);
+	}
+	,clear: function() {
+		this.map.clear();
+	}
+	,iterator: function() {
+		return new loreline__$Node_NodeIdMapIterator(this.map);
+	}
+	,keys: function() {
+		return new loreline__$Node_NodeIdMapKeyIterator(this.map);
+	}
+	,keyValueIterator: function() {
+		return new loreline__$Node_NodeIdMapKeyValueIterator(this.map);
+	}
+	,__class__: loreline_NodeIdMap
+};
+var loreline__$Node_NodeIdMapIterator = function(map) {
+	this.map = map;
+	this.index = 0;
+	while(this.index < this.map._values.length && this.map._values[this.index] == null) this.index++;
+};
+loreline__$Node_NodeIdMapIterator.__name__ = "loreline._Node.NodeIdMapIterator";
+loreline__$Node_NodeIdMapIterator.prototype = {
+	skipNulls: function() {
+		while(this.index < this.map._values.length && this.map._values[this.index] == null) this.index++;
+	}
+	,hasNext: function() {
+		return this.index < this.map._values.length;
+	}
+	,next: function() {
+		var v = this.map._values[this.index];
+		this.index++;
+		while(this.index < this.map._values.length && this.map._values[this.index] == null) this.index++;
+		return v;
+	}
+	,__class__: loreline__$Node_NodeIdMapIterator
+};
+var loreline__$Node_NodeIdMapKeyIterator = function(map) {
+	this.map = map;
+	this.index = 0;
+	while(this.index < this.map._values.length && this.map._values[this.index] == null) this.index++;
+};
+loreline__$Node_NodeIdMapKeyIterator.__name__ = "loreline._Node.NodeIdMapKeyIterator";
+loreline__$Node_NodeIdMapKeyIterator.prototype = {
+	skipNulls: function() {
+		while(this.index < this.map._values.length && this.map._values[this.index] == null) this.index++;
+	}
+	,hasNext: function() {
+		return this.index < this.map._values.length;
+	}
+	,next: function() {
+		var k1 = this.map._keys1[this.index];
+		var k2 = this.map._keys2[this.index];
+		this.index++;
+		while(this.index < this.map._values.length && this.map._values[this.index] == null) this.index++;
+		return loreline_NodeId.fromTwoInt32(k1,k2);
+	}
+	,__class__: loreline__$Node_NodeIdMapKeyIterator
+};
+var loreline__$Node_NodeIdMapKeyValueIterator = function(map) {
+	this.map = map;
+	this.index = 0;
+	while(this.index < this.map._values.length && this.map._values[this.index] == null) this.index++;
+};
+loreline__$Node_NodeIdMapKeyValueIterator.__name__ = "loreline._Node.NodeIdMapKeyValueIterator";
+loreline__$Node_NodeIdMapKeyValueIterator.prototype = {
+	skipNulls: function() {
+		while(this.index < this.map._values.length && this.map._values[this.index] == null) this.index++;
+	}
+	,hasNext: function() {
+		return this.index < this.map._values.length;
+	}
+	,next: function() {
+		var k1 = this.map._keys1[this.index];
+		var k2 = this.map._keys2[this.index];
+		var v = this.map._values[this.index];
+		this.index++;
+		while(this.index < this.map._values.length && this.map._values[this.index] == null) this.index++;
+		return { key : loreline_NodeId.fromTwoInt32(k1,k2), value : v};
+	}
+	,__class__: loreline__$Node_NodeIdMapKeyValueIterator
+};
 var loreline_Node = function(id,pos) {
-	this.id = -1;
+	this.id = loreline_NodeId.UNDEFINED;
 	this.id = id;
 	this.pos = pos;
 };
 loreline_Node.__name__ = "loreline.Node";
 loreline_Node.prototype = {
-	toJson: function() {
-		var c = js_Boot.getClass(this);
-		return { id : this.id, type : c.__name__.split(".").pop(), pos : this.pos.toJson()};
+	type: function() {
+		return "node";
+	}
+	,toJson: function() {
+		return { id : loreline_NodeId.toString(this.id), type : this.type(), pos : this.pos.toJson()};
 	}
 	,each: function(handleNode) {
 	}
@@ -7037,7 +8219,10 @@ var loreline_Comment = function(id,pos,content,multiline) {
 loreline_Comment.__name__ = "loreline.Comment";
 loreline_Comment.__super__ = loreline_Node;
 loreline_Comment.prototype = $extend(loreline_Node.prototype,{
-	toJson: function() {
+	type: function() {
+		return "Comment";
+	}
+	,toJson: function() {
 		var json = loreline_Node.prototype.toJson.call(this);
 		json.content = this.content;
 		json.multiline = this.multiline;
@@ -7053,7 +8238,10 @@ var loreline_AstNode = function(id,pos,leadingComments,trailingComments) {
 loreline_AstNode.__name__ = "loreline.AstNode";
 loreline_AstNode.__super__ = loreline_Node;
 loreline_AstNode.prototype = $extend(loreline_Node.prototype,{
-	each: function(handleNode) {
+	type: function() {
+		return "AstNode";
+	}
+	,each: function(handleNode) {
 		loreline_Node.prototype.each.call(this,handleNode);
 		if(this.leadingComments != null) {
 			var _g = 0;
@@ -7117,6 +8305,9 @@ loreline_NExpr.prototype = $extend(loreline_AstNode.prototype,{
 	toJson: function() {
 		return loreline_AstNode.prototype.toJson.call(this);
 	}
+	,type: function() {
+		return "Expr";
+	}
 	,__class__: loreline_NExpr
 });
 var loreline_NStateDecl = function(id,pos,temporary,fields,leadingComments,trailingComments) {
@@ -7128,7 +8319,10 @@ var loreline_NStateDecl = function(id,pos,temporary,fields,leadingComments,trail
 loreline_NStateDecl.__name__ = "loreline.NStateDecl";
 loreline_NStateDecl.__super__ = loreline_AstNode;
 loreline_NStateDecl.prototype = $extend(loreline_AstNode.prototype,{
-	get: function(name) {
+	type: function() {
+		return "State";
+	}
+	,get: function(name) {
 		var _g = 0;
 		var _g1 = this.fields;
 		while(_g < _g1.length) {
@@ -7178,7 +8372,10 @@ var loreline_NObjectField = function(id,pos,name,value,leadingComments,trailingC
 loreline_NObjectField.__name__ = "loreline.NObjectField";
 loreline_NObjectField.__super__ = loreline_AstNode;
 loreline_NObjectField.prototype = $extend(loreline_AstNode.prototype,{
-	each: function(handleNode) {
+	type: function() {
+		return "Field";
+	}
+	,each: function(handleNode) {
 		loreline_AstNode.prototype.each.call(this,handleNode);
 		if(this.value != null) {
 			handleNode(this.value,this);
@@ -7203,7 +8400,10 @@ var loreline_NCharacterDecl = function(id,pos,name,namePos,fields,leadingComment
 loreline_NCharacterDecl.__name__ = "loreline.NCharacterDecl";
 loreline_NCharacterDecl.__super__ = loreline_AstNode;
 loreline_NCharacterDecl.prototype = $extend(loreline_AstNode.prototype,{
-	get: function(name) {
+	type: function() {
+		return "Character";
+	}
+	,get: function(name) {
 		var _g = 0;
 		var _g1 = this.fields;
 		while(_g < _g1.length) {
@@ -7255,7 +8455,10 @@ var loreline_NBeatDecl = function(id,pos,name,body,leadingComments,trailingComme
 loreline_NBeatDecl.__name__ = "loreline.NBeatDecl";
 loreline_NBeatDecl.__super__ = loreline_AstNode;
 loreline_NBeatDecl.prototype = $extend(loreline_AstNode.prototype,{
-	each: function(handleNode) {
+	type: function() {
+		return "Beat";
+	}
+	,each: function(handleNode) {
 		loreline_AstNode.prototype.each.call(this,handleNode);
 		if(this.body != null) {
 			var _g = 0;
@@ -7300,16 +8503,19 @@ loreline_BlockStyle.toString = function(this1) {
 		return "Braces";
 	}
 };
-var loreline_NStringPart = function(id,pos,type,leadingComments,trailingComments) {
+var loreline_NStringPart = function(id,pos,partType,leadingComments,trailingComments) {
 	loreline_NExpr.call(this,id,pos,leadingComments,trailingComments);
-	this.type = type;
+	this.partType = partType;
 };
 loreline_NStringPart.__name__ = "loreline.NStringPart";
 loreline_NStringPart.__super__ = loreline_NExpr;
 loreline_NStringPart.prototype = $extend(loreline_NExpr.prototype,{
-	each: function(handleNode) {
+	type: function() {
+		return "Part";
+	}
+	,each: function(handleNode) {
 		loreline_NExpr.prototype.each.call(this,handleNode);
-		var _g = this.type;
+		var _g = this.partType;
 		switch(_g._hx_index) {
 		case 0:
 			var _g1 = _g.text;
@@ -7329,22 +8535,22 @@ loreline_NStringPart.prototype = $extend(loreline_NExpr.prototype,{
 	}
 	,toJson: function() {
 		var json = loreline_NExpr.prototype.toJson.call(this);
-		var _g = this.type;
+		var _g = this.partType;
 		switch(_g._hx_index) {
 		case 0:
 			var text = _g.text;
-			json.type = "Raw";
+			json.part = "Raw";
 			json.text = text;
 			break;
 		case 1:
 			var expr = _g.expr;
-			json.type = "Expr";
+			json.part = "Expr";
 			json.expression = expr.toJson();
 			break;
 		case 2:
 			var closing = _g.closing;
 			var expr = _g.expr;
-			json.type = "Tag";
+			json.part = "Tag";
 			json.closing = closing;
 			json.content = expr.toJson();
 			break;
@@ -7361,7 +8567,10 @@ var loreline_NStringLiteral = function(id,pos,quotes,parts,leadingComments,trail
 loreline_NStringLiteral.__name__ = "loreline.NStringLiteral";
 loreline_NStringLiteral.__super__ = loreline_NExpr;
 loreline_NStringLiteral.prototype = $extend(loreline_NExpr.prototype,{
-	each: function(handleNode) {
+	type: function() {
+		return "String";
+	}
+	,each: function(handleNode) {
 		loreline_NExpr.prototype.each.call(this,handleNode);
 		if(this.parts != null) {
 			var _g = 0;
@@ -7398,7 +8607,10 @@ var loreline_NTextStatement = function(id,pos,content,leadingComments,trailingCo
 loreline_NTextStatement.__name__ = "loreline.NTextStatement";
 loreline_NTextStatement.__super__ = loreline_AstNode;
 loreline_NTextStatement.prototype = $extend(loreline_AstNode.prototype,{
-	each: function(handleNode) {
+	type: function() {
+		return "Text";
+	}
+	,each: function(handleNode) {
 		loreline_AstNode.prototype.each.call(this,handleNode);
 		if(this.content != null) {
 			handleNode(this.content,this);
@@ -7421,7 +8633,10 @@ var loreline_NDialogueStatement = function(id,pos,character,characterPos,content
 loreline_NDialogueStatement.__name__ = "loreline.NDialogueStatement";
 loreline_NDialogueStatement.__super__ = loreline_AstNode;
 loreline_NDialogueStatement.prototype = $extend(loreline_AstNode.prototype,{
-	each: function(handleNode) {
+	type: function() {
+		return "Dialogue";
+	}
+	,each: function(handleNode) {
 		loreline_AstNode.prototype.each.call(this,handleNode);
 		if(this.content != null) {
 			handleNode(this.content,this);
@@ -7445,7 +8660,10 @@ var loreline_NChoiceStatement = function(id,pos,options,leadingComments,trailing
 loreline_NChoiceStatement.__name__ = "loreline.NChoiceStatement";
 loreline_NChoiceStatement.__super__ = loreline_AstNode;
 loreline_NChoiceStatement.prototype = $extend(loreline_AstNode.prototype,{
-	each: function(handleNode) {
+	type: function() {
+		return "Choice";
+	}
+	,each: function(handleNode) {
 		loreline_AstNode.prototype.each.call(this,handleNode);
 		if(this.options != null) {
 			var _g = 0;
@@ -7484,7 +8702,10 @@ var loreline_NChoiceOption = function(id,pos,text,condition,body,leadingComments
 loreline_NChoiceOption.__name__ = "loreline.NChoiceOption";
 loreline_NChoiceOption.__super__ = loreline_AstNode;
 loreline_NChoiceOption.prototype = $extend(loreline_AstNode.prototype,{
-	each: function(handleNode) {
+	type: function() {
+		return "Option";
+	}
+	,each: function(handleNode) {
 		loreline_AstNode.prototype.each.call(this,handleNode);
 		if(this.body != null) {
 			var _g = 0;
@@ -7533,7 +8754,10 @@ var loreline_NBlock = function(id,pos,body,leadingComments,trailingComments) {
 loreline_NBlock.__name__ = "loreline.NBlock";
 loreline_NBlock.__super__ = loreline_AstNode;
 loreline_NBlock.prototype = $extend(loreline_AstNode.prototype,{
-	each: function(handleNode) {
+	type: function() {
+		return "Block";
+	}
+	,each: function(handleNode) {
 		loreline_AstNode.prototype.each.call(this,handleNode);
 		if(this.body != null) {
 			var _g = 0;
@@ -7573,7 +8797,10 @@ var loreline_NIfStatement = function(id,pos,condition,thenBranch,elseBranch,lead
 loreline_NIfStatement.__name__ = "loreline.NIfStatement";
 loreline_NIfStatement.__super__ = loreline_AstNode;
 loreline_NIfStatement.prototype = $extend(loreline_AstNode.prototype,{
-	each: function(handleNode) {
+	type: function() {
+		return "If";
+	}
+	,each: function(handleNode) {
 		loreline_AstNode.prototype.each.call(this,handleNode);
 		if(this.condition != null) {
 			handleNode(this.condition,this);
@@ -7672,7 +8899,10 @@ var loreline_NCall = function(id,pos,target,args,leadingComments,trailingComment
 loreline_NCall.__name__ = "loreline.NCall";
 loreline_NCall.__super__ = loreline_NExpr;
 loreline_NCall.prototype = $extend(loreline_NExpr.prototype,{
-	each: function(handleNode) {
+	type: function() {
+		return "Call";
+	}
+	,each: function(handleNode) {
 		loreline_NExpr.prototype.each.call(this,handleNode);
 		if(this.target != null) {
 			handleNode(this.target,this);
@@ -7713,7 +8943,10 @@ var loreline_NTransition = function(id,pos,target,targetPos,leadingComments,trai
 loreline_NTransition.__name__ = "loreline.NTransition";
 loreline_NTransition.__super__ = loreline_AstNode;
 loreline_NTransition.prototype = $extend(loreline_AstNode.prototype,{
-	toJson: function() {
+	type: function() {
+		return "Transition";
+	}
+	,toJson: function() {
 		var json = loreline_AstNode.prototype.toJson.call(this);
 		json.target = this.target;
 		json.targetPos = this.targetPos.toJson();
@@ -7721,30 +8954,58 @@ loreline_NTransition.prototype = $extend(loreline_AstNode.prototype,{
 	}
 	,__class__: loreline_NTransition
 });
-var loreline_NLiteral = function(id,pos,value,type,leadingComments,trailingComments) {
+var loreline_NFunctionDecl = function(id,pos,name,args,code,leadingComments,trailingComments) {
+	loreline_NExpr.call(this,id,pos,leadingComments,trailingComments);
+	this.name = name;
+	this.args = args;
+	this.code = code;
+};
+loreline_NFunctionDecl.__name__ = "loreline.NFunctionDecl";
+loreline_NFunctionDecl.__super__ = loreline_NExpr;
+loreline_NFunctionDecl.prototype = $extend(loreline_NExpr.prototype,{
+	type: function() {
+		return "Function";
+	}
+	,toJson: function() {
+		var json = loreline_NExpr.prototype.toJson.call(this);
+		if(this.name != null) {
+			json.name = this.name;
+		}
+		json.args = [].concat(this.args);
+		json.code = this.code;
+		return json;
+	}
+	,__class__: loreline_NFunctionDecl
+});
+var loreline_NLiteral = function(id,pos,value,literalType,leadingComments,trailingComments) {
 	loreline_NExpr.call(this,id,pos,leadingComments,trailingComments);
 	this.value = value;
-	this.type = type;
+	this.literalType = literalType;
 };
 loreline_NLiteral.__name__ = "loreline.NLiteral";
 loreline_NLiteral.__super__ = loreline_NExpr;
 loreline_NLiteral.prototype = $extend(loreline_NExpr.prototype,{
-	each: function(handleNode) {
+	type: function() {
+		return "Literal";
+	}
+	,each: function(handleNode) {
 		loreline_NExpr.prototype.each.call(this,handleNode);
-		var _g = this.type;
+		var _g = this.literalType;
 		switch(_g._hx_index) {
 		case 0:case 1:case 2:
 			break;
 		case 3:
-			var _g1 = 0;
-			var _g2 = this.value;
-			while(_g1 < _g2.length) {
-				var elem = _g2[_g1];
-				++_g1;
-				if(((elem) instanceof loreline_Node)) {
-					var node = elem;
-					handleNode(node,this);
-					node.each(handleNode);
+			if(this.value != null) {
+				var _g1 = 0;
+				var _g2 = this.value;
+				while(_g1 < _g2.length) {
+					var elem = _g2[_g1];
+					++_g1;
+					if(((elem) instanceof loreline_Node)) {
+						var node = elem;
+						handleNode(node,this);
+						node.each(handleNode);
+					}
 				}
 			}
 			break;
@@ -7768,27 +9029,29 @@ loreline_NLiteral.prototype = $extend(loreline_NExpr.prototype,{
 	}
 	,toJson: function() {
 		var json = loreline_NExpr.prototype.toJson.call(this);
-		var e = this.type;
-		json.literalType = $hxEnums[e.__enum__].__constructs__[e._hx_index]._hx_name;
-		var _g = this.type;
+		var e = this.literalType;
+		json.literal = $hxEnums[e.__enum__].__constructs__[e._hx_index]._hx_name;
+		var _g = this.literalType;
 		switch(_g._hx_index) {
 		case 0:case 1:case 2:
 			json.value = this.value;
 			break;
 		case 3:
-			var _g1 = [];
-			var _g2 = 0;
-			var _g3 = this.value;
-			while(_g2 < _g3.length) {
-				var elem = _g3[_g2];
-				++_g2;
-				if(((elem) instanceof loreline_Node)) {
-					_g1.push(elem.toJson());
-				} else {
-					_g1.push(elem);
+			if(this.value != null) {
+				var _g1 = [];
+				var _g2 = 0;
+				var _g3 = this.value;
+				while(_g2 < _g3.length) {
+					var elem = _g3[_g2];
+					++_g2;
+					if(((elem) instanceof loreline_Node)) {
+						_g1.push(elem.toJson());
+					} else {
+						_g1.push(elem);
+					}
 				}
+				json.value = _g1;
 			}
-			json.value = _g1;
 			break;
 		case 4:
 			var style = _g.style;
@@ -7828,7 +9091,10 @@ var loreline_NAccess = function(id,pos,target,name,leadingComments,trailingComme
 loreline_NAccess.__name__ = "loreline.NAccess";
 loreline_NAccess.__super__ = loreline_NExpr;
 loreline_NAccess.prototype = $extend(loreline_NExpr.prototype,{
-	each: function(handleNode) {
+	type: function() {
+		return "Access";
+	}
+	,each: function(handleNode) {
 		loreline_NExpr.prototype.each.call(this,handleNode);
 		if(this.target != null) {
 			handleNode(this.target,this);
@@ -7854,7 +9120,10 @@ var loreline_NAssign = function(id,pos,target,op,value,leadingComments,trailingC
 loreline_NAssign.__name__ = "loreline.NAssign";
 loreline_NAssign.__super__ = loreline_NExpr;
 loreline_NAssign.prototype = $extend(loreline_NExpr.prototype,{
-	each: function(handleNode) {
+	type: function() {
+		return "Assign";
+	}
+	,each: function(handleNode) {
 		loreline_NExpr.prototype.each.call(this,handleNode);
 		if(this.target != null) {
 			handleNode(this.target,this);
@@ -7882,7 +9151,10 @@ var loreline_NArrayAccess = function(id,pos,target,index,leadingComments,trailin
 loreline_NArrayAccess.__name__ = "loreline.NArrayAccess";
 loreline_NArrayAccess.__super__ = loreline_NExpr;
 loreline_NArrayAccess.prototype = $extend(loreline_NExpr.prototype,{
-	each: function(handleNode) {
+	type: function() {
+		return "ArrayAccess";
+	}
+	,each: function(handleNode) {
 		loreline_NExpr.prototype.each.call(this,handleNode);
 		if(this.target != null) {
 			handleNode(this.target,this);
@@ -7910,7 +9182,10 @@ var loreline_NBinary = function(id,pos,left,op,right,leadingComments,trailingCom
 loreline_NBinary.__name__ = "loreline.NBinary";
 loreline_NBinary.__super__ = loreline_NExpr;
 loreline_NBinary.prototype = $extend(loreline_NExpr.prototype,{
-	each: function(handleNode) {
+	type: function() {
+		return "Binary";
+	}
+	,each: function(handleNode) {
 		loreline_NExpr.prototype.each.call(this,handleNode);
 		if(this.left != null) {
 			handleNode(this.left,this);
@@ -7938,7 +9213,10 @@ var loreline_NUnary = function(id,pos,op,operand,leadingComments,trailingComment
 loreline_NUnary.__name__ = "loreline.NUnary";
 loreline_NUnary.__super__ = loreline_NExpr;
 loreline_NUnary.prototype = $extend(loreline_NExpr.prototype,{
-	each: function(handleNode) {
+	type: function() {
+		return "Unary";
+	}
+	,each: function(handleNode) {
 		loreline_NExpr.prototype.each.call(this,handleNode);
 		if(this.operand != null) {
 			handleNode(this.operand,this);
@@ -7960,7 +9238,10 @@ var loreline_NImport = function(id,pos,path,leadingComments,trailingComments) {
 loreline_NImport.__name__ = "loreline.NImport";
 loreline_NImport.__super__ = loreline_AstNode;
 loreline_NImport.prototype = $extend(loreline_AstNode.prototype,{
-	toJson: function() {
+	type: function() {
+		return "Import";
+	}
+	,toJson: function() {
 		var json = loreline_AstNode.prototype.toJson.call(this);
 		json.path = this.path;
 		return json;
@@ -7983,25 +9264,81 @@ var loreline_Parser = function(tokens) {
 	this.lastTokenEnd = new loreline_Position(1,1,0);
 	this.lastLineBreak = null;
 	this.lineBreakAfterToken = false;
-	this.nextNodeId = 0;
+	this.currentNodeId = loreline_NodeId.UNDEFINED;
 	this.rootBeat = null;
 };
 loreline_Parser.__name__ = "loreline.Parser";
 loreline_Parser.prototype = {
-	peek: function() {
+	parse: function() {
+		var rootParsing = !loreline_Parser.parse_parsing;
+		if(rootParsing) {
+			loreline_Parser.parse_parsing = true;
+			this.currentNodeId = loreline_NodeId.UNDEFINED;
+		}
+		var startPos = this.currentPos();
+		var nodes = [];
+		var script = new loreline_Script(this.nextNodeId(4),startPos,nodes);
+		while(!this.isAtEnd()) try {
+			var node = this.parseNode(true);
+			if(node != null) {
+				nodes.push(node);
+			}
+			while(this.match(loreline_TokenType.LineBreak)) {
+			}
+		} catch( _g ) {
+			var _g1 = haxe_Exception.caught(_g).unwrap();
+			if(((_g1) instanceof loreline_ParseError)) {
+				var e = _g1;
+				this.addError(e);
+				this.synchronize();
+			} else {
+				throw _g;
+			}
+		}
+		if(rootParsing) {
+			loreline_Parser.parse_parsing = false;
+		}
+		return script;
+	}
+	,getErrors: function() {
+		if(this.errors == null) {
+			this.errors = [];
+		}
+		return this.errors;
+	}
+	,nextNodeId: function(step) {
+		var tmp;
+		switch(step) {
+		case 1:
+			tmp = loreline_NodeId.nextSection(this.currentNodeId);
+			break;
+		case 2:
+			tmp = loreline_NodeId.nextBranch(this.currentNodeId);
+			break;
+		case 3:
+			tmp = loreline_NodeId.nextBlock(this.currentNodeId);
+			break;
+		case 4:
+			tmp = loreline_NodeId.nextNode(this.currentNodeId);
+			break;
+		}
+		this.currentNodeId = tmp;
+		return this.currentNodeId;
+	}
+	,peek: function() {
 		var i = this.current + 1;
 		while(i < this.tokens.length) {
 			var _g = this.tokens[i].type;
 			switch(_g._hx_index) {
-			case 42:
+			case 43:
 				var _g1 = _g.content;
 				++i;
 				break;
-			case 43:
+			case 44:
 				var _g2 = _g.content;
 				++i;
 				break;
-			case 46:
+			case 47:
 				++i;
 				break;
 			default:
@@ -8010,30 +9347,33 @@ loreline_Parser.prototype = {
 		}
 		return this.tokens[this.tokens.length - 1];
 	}
-	,advance: function() {
+	,advance: function(advanceLineBreaks) {
+		if(advanceLineBreaks == null) {
+			advanceLineBreaks = true;
+		}
 		var prev = this.tokens[this.current];
 		if(!this.isAtEnd()) {
 			this.lastTokenEnd = prev.pos;
 			this.lineBreakAfterToken = false;
-			while(!this.isAtEnd() && this.tokens[this.current + 1] != null && (this.isComment(this.tokens[this.current + 1].type) || this.tokens[this.current + 1].type == loreline_TokenType.LineBreak)) {
+			while(!this.isAtEnd() && this.tokens[this.current + 1] != null && (this.isComment(this.tokens[this.current + 1].type) || advanceLineBreaks && this.tokens[this.current + 1].type == loreline_TokenType.LineBreak)) {
 				this.current++;
 				var _g = this.tokens[this.current].type;
 				switch(_g._hx_index) {
-				case 42:
+				case 43:
 					var content = _g.content;
 					if(this.pendingComments == null) {
 						this.pendingComments = [];
 					}
-					this.pendingComments.push(new loreline_Comment(this.nextNodeId++,this.currentPos(),content,false));
+					this.pendingComments.push(new loreline_Comment(this.nextNodeId(4),this.currentPos(),content,false));
 					break;
-				case 43:
+				case 44:
 					var content1 = _g.content;
 					if(this.pendingComments == null) {
 						this.pendingComments = [];
 					}
-					this.pendingComments.push(new loreline_Comment(this.nextNodeId++,this.currentPos(),content1,true));
+					this.pendingComments.push(new loreline_Comment(this.nextNodeId(4),this.currentPos(),content1,true));
 					break;
-				case 46:
+				case 47:
 					this.lastLineBreak = this.currentPos();
 					this.lineBreakAfterToken = true;
 					break;
@@ -8061,7 +9401,7 @@ loreline_Parser.prototype = {
 		var n = this.current - 1;
 		while(n >= 0) {
 			var _g = this.tokens[n].type;
-			if(_g._hx_index == 12) {
+			if(_g._hx_index == 13) {
 				var _g1 = _g.name;
 				return this.tokens[n];
 			}
@@ -8074,13 +9414,13 @@ loreline_Parser.prototype = {
 		while(n >= 0) {
 			var _g = this.tokens[n].type;
 			switch(_g._hx_index) {
-			case 42:
+			case 43:
 				var _g1 = _g.content;
 				break;
-			case 43:
+			case 44:
 				var _g2 = _g.content;
 				break;
-			case 44:case 45:case 46:
+			case 45:case 46:case 47:
 				break;
 			default:
 				return this.tokens[n];
@@ -8094,13 +9434,13 @@ loreline_Parser.prototype = {
 		while(n < this.tokens.length) {
 			var _g = this.tokens[n].type;
 			switch(_g._hx_index) {
-			case 42:
+			case 43:
 				var _g1 = _g.content;
 				break;
-			case 43:
+			case 44:
 				var _g2 = _g.content;
 				break;
-			case 44:case 45:case 46:
+			case 45:case 46:case 47:
 				break;
 			default:
 				return this.tokens[n];
@@ -8114,13 +9454,13 @@ loreline_Parser.prototype = {
 		while(n < this.tokens.length) {
 			var _g = this.tokens[n].type;
 			switch(_g._hx_index) {
-			case 42:
+			case 43:
 				var _g1 = _g.content;
 				break;
-			case 43:
+			case 44:
 				var _g2 = _g.content;
 				break;
-			case 46:
+			case 47:
 				break;
 			default:
 				return this.tokens[n];
@@ -8142,7 +9482,7 @@ loreline_Parser.prototype = {
 		if(this.isAtEnd()) {
 			return false;
 		}
-		if(type._hx_index == 33) {
+		if(type._hx_index == 34) {
 			return this.tokens[this.current].type == loreline_TokenType.Colon;
 		} else {
 			return loreline_TokenTypeHelpers.equals(this.tokens[this.current].type,type);
@@ -8150,7 +9490,7 @@ loreline_Parser.prototype = {
 	}
 	,checkString: function() {
 		var _g = this.tokens[this.current].type;
-		if(_g._hx_index == 8) {
+		if(_g._hx_index == 9) {
 			var _g1 = _g.attachments;
 			var s = _g.quotes;
 			var attachments = _g.s;
@@ -8168,46 +9508,15 @@ loreline_Parser.prototype = {
 	}
 	,isComment: function(type) {
 		switch(type._hx_index) {
-		case 42:
+		case 43:
 			var _g = type.content;
 			return true;
-		case 43:
+		case 44:
 			var _g = type.content;
 			return true;
 		default:
 			return false;
 		}
-	}
-	,parse: function() {
-		var rootParsing = !loreline_Parser.parse_parsing;
-		if(rootParsing) {
-			loreline_Parser.parse_parsing = true;
-			this.nextNodeId = 1;
-		}
-		var startPos = this.currentPos();
-		var nodes = [];
-		var script = new loreline_Script(this.nextNodeId++,startPos,nodes);
-		while(!this.isAtEnd()) try {
-			var node = this.parseNode(true);
-			if(node != null) {
-				nodes.push(node);
-			}
-			while(this.match(loreline_TokenType.LineBreak)) {
-			}
-		} catch( _g ) {
-			var _g1 = haxe_Exception.caught(_g).unwrap();
-			if(((_g1) instanceof loreline_ParseError)) {
-				var e = _g1;
-				this.addError(e);
-				this.synchronize();
-			} else {
-				throw _g;
-			}
-		}
-		if(rootParsing) {
-			loreline_Parser.parse_parsing = false;
-		}
-		return script;
 	}
 	,parseNode: function(topLevel) {
 		if(topLevel == null) {
@@ -8220,16 +9529,16 @@ loreline_Parser.prototype = {
 					this.pendingComments = [];
 				}
 				var tmp = this.pendingComments;
-				var tmp1 = this.nextNodeId++;
+				var tmp1 = this.nextNodeId(4);
 				var tmp2 = this.currentPos();
 				var _g = this.tokens[this.current].type;
 				var tmp3;
 				switch(_g._hx_index) {
-				case 42:
+				case 43:
 					var content = _g.content;
 					tmp3 = content;
 					break;
-				case 43:
+				case 44:
 					var content1 = _g.content;
 					tmp3 = content1;
 					break;
@@ -8238,7 +9547,7 @@ loreline_Parser.prototype = {
 				}
 				var _g1 = this.tokens[this.current].type;
 				var tmp4;
-				if(_g1._hx_index == 43) {
+				if(_g1._hx_index == 44) {
 					var _g2 = _g1.content;
 					tmp4 = true;
 				} else {
@@ -8266,7 +9575,9 @@ loreline_Parser.prototype = {
 			if(topLevel) {
 				return this.parseCharacterDecl();
 			} else {
-				throw haxe_Exception.thrown(new loreline_ParseError("Unexpected token: " + Std.string(this.tokens[this.current].type),this.currentPos()));
+				this.addError(new loreline_ParseError("Unexpected token: " + Std.string(this.tokens[this.current].type),this.currentPos()));
+				this.advance();
+				return new loreline_NLiteral(this.nextNodeId(4),this.currentPos(),null,loreline_LiteralType.Null);
 			}
 			break;
 		case 4:
@@ -8298,6 +9609,11 @@ loreline_Parser.prototype = {
 			}
 			break;
 		case 8:
+			var _g1 = _g.name;
+			var _g1 = _g.args;
+			var _g1 = _g.code;
+			return this.parseFunction();
+		case 9:
 			var _g1 = _g.quotes;
 			var _g1 = _g.s;
 			var _g1 = _g.attachments;
@@ -8308,13 +9624,13 @@ loreline_Parser.prototype = {
 				return node;
 			}
 			break;
-		case 9:
+		case 10:
 			var _g1 = _g.n;
 			return this.parseExpressionStatement();
-		case 10:
+		case 11:
 			var _g1 = _g.b;
 			return this.parseExpressionStatement();
-		case 12:
+		case 13:
 			var _g1 = _g.name;
 			if(this.peek().type == loreline_TokenType.Colon) {
 				var node = this.parseDialogueStatement();
@@ -8327,9 +9643,9 @@ loreline_Parser.prototype = {
 				return this.parseExpressionStatement();
 			}
 			break;
-		case 11:case 19:case 31:case 36:case 38:case 40:
+		case 12:case 20:case 32:case 37:case 39:case 41:
 			return this.parseExpressionStatement();
-		case 32:
+		case 33:
 			var node = this.parseTransition();
 			if(topLevel) {
 				return _gthis.wrapInRootBeat(node);
@@ -8338,7 +9654,9 @@ loreline_Parser.prototype = {
 			}
 			break;
 		default:
-			throw haxe_Exception.thrown(new loreline_ParseError("Unexpected token: " + Std.string(this.tokens[this.current].type),this.currentPos()));
+			this.addError(new loreline_ParseError("Unexpected token: " + Std.string(this.tokens[this.current].type),this.currentPos()));
+			this.advance();
+			return new loreline_NLiteral(this.nextNodeId(4),this.currentPos(),null,loreline_LiteralType.Null);
 		}
 	}
 	,wrapInRootBeat: function(node) {
@@ -8347,7 +9665,7 @@ loreline_Parser.prototype = {
 		if(this.rootBeat == null) {
 			var startPos = this.currentPos();
 			body = [];
-			this.rootBeat = new loreline_NBeatDecl(this.nextNodeId++,startPos,"_",body);
+			this.rootBeat = new loreline_NBeatDecl(this.nextNodeId(1),startPos,"_",body);
 			result = this.rootBeat;
 		} else {
 			body = this.rootBeat.body;
@@ -8357,11 +9675,11 @@ loreline_Parser.prototype = {
 	}
 	,parseImport: function() {
 		var startPos = this.currentPos();
-		var imp = new loreline_NImport(this.nextNodeId++,startPos,null);
+		var imp = new loreline_NImport(this.nextNodeId(4),startPos,null);
 		this.expect(loreline_TokenType.KwImport);
 		var path;
 		var _g = this.tokens[this.current].type;
-		if(_g._hx_index == 8) {
+		if(_g._hx_index == 9) {
 			var _g1 = _g.s;
 			var _g1 = _g.attachments;
 			var s = _g.quotes;
@@ -8375,10 +9693,10 @@ loreline_Parser.prototype = {
 	}
 	,parseDialogueStatement: function() {
 		var startPos = this.currentPos();
-		var dialogue = new loreline_NDialogueStatement(this.nextNodeId++,startPos,null,null,null);
+		var dialogue = new loreline_NDialogueStatement(this.nextNodeId(4),startPos,null,null,null);
 		var _g = this.tokens[this.current].type;
 		var tmp;
-		if(_g._hx_index == 12) {
+		if(_g._hx_index == 13) {
 			var name = _g.name;
 			tmp = name;
 		} else {
@@ -8431,7 +9749,7 @@ loreline_Parser.prototype = {
 	}
 	,parseStateDecl: function(temporary) {
 		var startPos = this.currentPos();
-		var stateNode = new loreline_NStateDecl(this.nextNodeId++,startPos,temporary,[]);
+		var stateNode = new loreline_NStateDecl(this.nextNodeId(3),startPos,temporary,[]);
 		this.expect(loreline_TokenType.KwState);
 		var blockEnd = this.parseBlockStart().type == loreline_TokenType.Indent ? loreline_TokenType.Unindent : loreline_TokenType.RBrace;
 		stateNode.style = blockEnd == loreline_TokenType.RBrace ? 1 : 0;
@@ -8452,7 +9770,7 @@ loreline_Parser.prototype = {
 	,parseObjectField: function() {
 		var startPos = this.currentPos();
 		var name = this.expectIdentifier();
-		var objectField = new loreline_NObjectField(this.nextNodeId++,startPos,name,null);
+		var objectField = new loreline_NObjectField(this.nextNodeId(3),startPos,name,null);
 		this.expect(loreline_TokenType.Colon);
 		this.attachComments(objectField);
 		if(this.checkBlockStart()) {
@@ -8465,7 +9783,7 @@ loreline_Parser.prototype = {
 	}
 	,parseBeatDecl: function() {
 		var startPos = this.currentPos();
-		var beatNode = new loreline_NBeatDecl(this.nextNodeId++,startPos,null,[],[]);
+		var beatNode = new loreline_NBeatDecl(this.nextNodeId(1),startPos,null,[],[]);
 		this.expect(loreline_TokenType.KwBeat);
 		beatNode.pos = startPos.extendedTo(this.currentPos());
 		beatNode.name = this.expectIdentifier();
@@ -8556,7 +9874,7 @@ loreline_Parser.prototype = {
 	}
 	,parseCharacterDecl: function() {
 		var startPos = this.currentPos();
-		var characterNode = new loreline_NCharacterDecl(this.nextNodeId++,startPos,null,null,[]);
+		var characterNode = new loreline_NCharacterDecl(this.nextNodeId(3),startPos,null,null,[]);
 		this.expect(loreline_TokenType.KwCharacter);
 		characterNode.name = this.expectIdentifier();
 		characterNode.namePos = this.prevNonWhitespaceOrComment().pos;
@@ -8578,13 +9896,13 @@ loreline_Parser.prototype = {
 	}
 	,parseTextStatement: function() {
 		var startPos = this.currentPos();
-		var statement = this.attachComments(new loreline_NTextStatement(this.nextNodeId++,startPos,null));
+		var statement = this.attachComments(new loreline_NTextStatement(this.nextNodeId(4),startPos,null));
 		statement.content = this.parseStringLiteral();
 		return statement;
 	}
 	,parseChoiceStatement: function() {
 		var startPos = this.currentPos();
-		var choiceNode = new loreline_NChoiceStatement(this.nextNodeId++,startPos,[]);
+		var choiceNode = new loreline_NChoiceStatement(this.nextNodeId(2),startPos,[]);
 		this.expect(loreline_TokenType.KwChoice);
 		var blockEnd = this.parseBlockStart().type == loreline_TokenType.Indent ? loreline_TokenType.Unindent : loreline_TokenType.RBrace;
 		choiceNode.style = blockEnd == loreline_TokenType.RBrace ? 1 : 0;
@@ -8602,7 +9920,7 @@ loreline_Parser.prototype = {
 	}
 	,parseChoiceOption: function(blockEnd) {
 		var startPos = this.currentPos();
-		var choiceOption = this.attachComments(new loreline_NChoiceOption(this.nextNodeId++,startPos,null,null,[]));
+		var choiceOption = this.attachComments(new loreline_NChoiceOption(this.nextNodeId(3),startPos,null,null,[]));
 		choiceOption.text = this.parseStringLiteral();
 		if(this.match(loreline_TokenType.KwIf)) {
 			choiceOption.condition = this.parseConditionExpression();
@@ -8620,18 +9938,18 @@ loreline_Parser.prototype = {
 	,isExpressionStart: function() {
 		var _g = this.tokens[this.current].type;
 		switch(_g._hx_index) {
-		case 8:
+		case 9:
 			var _g1 = _g.quotes;
 			var _g1 = _g.s;
 			var _g1 = _g.attachments;
 			return true;
-		case 9:
+		case 10:
 			var _g1 = _g.n;
 			return true;
-		case 10:
+		case 11:
 			var _g1 = _g.b;
 			return true;
-		case 12:
+		case 13:
 			var _g1 = _g.name;
 			if(this.peek().type == loreline_TokenType.Colon) {
 				return false;
@@ -8639,7 +9957,7 @@ loreline_Parser.prototype = {
 				return true;
 			}
 			break;
-		case 11:case 19:case 31:case 36:case 38:case 40:
+		case 12:case 20:case 32:case 37:case 39:case 41:
 			return true;
 		default:
 			return false;
@@ -8649,7 +9967,7 @@ loreline_Parser.prototype = {
 		var expr = this.parseExpression();
 		if(this.match(loreline_TokenType.OpAssign) || this.match(loreline_TokenType.OpPlusAssign) || this.match(loreline_TokenType.OpMinusAssign) || this.match(loreline_TokenType.OpMultiplyAssign) || this.match(loreline_TokenType.OpDivideAssign)) {
 			var op = this.previous().type;
-			var assignment = this.attachComments(new loreline_NAssign(this.nextNodeId++,expr.pos,expr,op,null));
+			var assignment = this.attachComments(new loreline_NAssign(this.nextNodeId(4),expr.pos,expr,op,null));
 			assignment.value = this.parseExpression();
 			assignment.pos = assignment.pos.extendedTo(assignment.value.pos);
 			return assignment;
@@ -8659,12 +9977,12 @@ loreline_Parser.prototype = {
 	,isKnownNodeStart: function() {
 		var _g = this.tokens[this.current].type;
 		switch(_g._hx_index) {
-		case 8:
+		case 9:
 			var _g1 = _g.quotes;
 			var _g1 = _g.s;
 			var _g1 = _g.attachments;
 			return true;
-		case 12:
+		case 13:
 			var _g1 = _g.name;
 			if(this.peek().type == loreline_TokenType.Colon) {
 				return true;
@@ -8674,7 +9992,7 @@ loreline_Parser.prototype = {
 				return false;
 			}
 			break;
-		case 1:case 2:case 3:case 4:case 5:case 32:
+		case 1:case 2:case 3:case 4:case 5:case 33:
 			return true;
 		default:
 			return false;
@@ -8682,13 +10000,13 @@ loreline_Parser.prototype = {
 	}
 	,parseIfStatement: function() {
 		var startPos = this.currentPos();
-		var ifNode = new loreline_NIfStatement(this.nextNodeId++,startPos,null,null,null);
+		var ifNode = new loreline_NIfStatement(this.nextNodeId(4),startPos,null,null,null);
 		this.expect(loreline_TokenType.KwIf);
 		ifNode.condition = this.parseConditionExpression();
 		while(this.match(loreline_TokenType.LineBreak)) {
 		}
 		this.attachComments(ifNode);
-		ifNode.thenBranch = new loreline_NBlock(this.nextNodeId++,this.currentPos(),null);
+		ifNode.thenBranch = new loreline_NBlock(this.nextNodeId(3),this.currentPos(),null);
 		ifNode.thenBranch.body = [];
 		ifNode.thenBranch.style = this.parseStatementBlock(ifNode.thenBranch.body);
 		var elseToken = this.tokens[this.current];
@@ -8698,12 +10016,12 @@ loreline_Parser.prototype = {
 			}
 			this.attachElseComments(ifNode,elseToken);
 			if(this.check(loreline_TokenType.KwIf)) {
-				ifNode.elseBranch = new loreline_NBlock(this.nextNodeId++,this.currentPos(),null);
+				ifNode.elseBranch = new loreline_NBlock(this.nextNodeId(3),this.currentPos(),null);
 				var tmp = this.parseIfStatement();
 				ifNode.elseBranch.body = [tmp];
 				ifNode.elseBranch.style = 0;
 			} else {
-				ifNode.elseBranch = new loreline_NBlock(this.nextNodeId++,this.currentPos(),null);
+				ifNode.elseBranch = new loreline_NBlock(this.nextNodeId(3),this.currentPos(),null);
 				ifNode.elseBranch.body = [];
 				ifNode.elseBranch.style = this.parseStatementBlock(ifNode.elseBranch.body);
 			}
@@ -8715,10 +10033,23 @@ loreline_Parser.prototype = {
 		var startPos = this.currentPos();
 		this.expect(loreline_TokenType.Arrow);
 		if(this.match(loreline_TokenType.Dot)) {
-			return this.attachComments(new loreline_NTransition(this.nextNodeId++,startPos.extendedTo(this.prevNonWhitespaceOrComment().pos),".",this.prevNonWhitespaceOrComment().pos));
+			return this.attachComments(new loreline_NTransition(this.nextNodeId(4),startPos.extendedTo(this.prevNonWhitespaceOrComment().pos),".",this.prevNonWhitespaceOrComment().pos));
 		}
 		var target = this.expectIdentifier();
-		return this.attachComments(new loreline_NTransition(this.nextNodeId++,startPos.extendedTo(this.prevNonWhitespaceOrComment().pos),target,this.prevNonWhitespaceOrComment().pos));
+		return this.attachComments(new loreline_NTransition(this.nextNodeId(4),startPos.extendedTo(this.prevNonWhitespaceOrComment().pos),target,this.prevNonWhitespaceOrComment().pos));
+	}
+	,parseFunction: function() {
+		var startPos = this.currentPos();
+		var _g = this.tokens[this.current].type;
+		if(_g._hx_index == 8) {
+			var name = _g.name;
+			var args = _g.args;
+			var body = _g.code;
+			this.advance();
+			return this.attachComments(new loreline_NFunctionDecl(this.nextNodeId(3),startPos,name,[].concat(args),body));
+		} else {
+			throw haxe_Exception.thrown(new loreline_ParseError("Unexpected token in expression",this.currentPos()));
+		}
 	}
 	,parseExpression: function() {
 		try {
@@ -8726,7 +10057,7 @@ loreline_Parser.prototype = {
 			if(this.check(loreline_TokenType.OpAssign) || this.check(loreline_TokenType.OpPlusAssign) || this.check(loreline_TokenType.OpMinusAssign) || this.check(loreline_TokenType.OpMultiplyAssign) || this.check(loreline_TokenType.OpDivideAssign)) {
 				var op = this.tokens[this.current].type;
 				this.advance();
-				var assignment = this.attachComments(new loreline_NAssign(this.nextNodeId++,expr.pos,expr,op,null));
+				var assignment = this.attachComments(new loreline_NAssign(this.nextNodeId(4),expr.pos,expr,op,null));
 				assignment.value = this.parseExpression();
 				assignment.pos = assignment.pos.extendedTo(assignment.value.pos);
 				return assignment;
@@ -8737,14 +10068,14 @@ loreline_Parser.prototype = {
 			if(((e) instanceof loreline_ParseError)) {
 				this.addError(e);
 			}
-			return new loreline_NLiteral(this.nextNodeId++,this.currentPos(),null,loreline_LiteralType.Null);
+			return new loreline_NLiteral(this.nextNodeId(4),this.currentPos(),null,loreline_LiteralType.Null);
 		}
 	}
 	,parseLogicalOr: function() {
 		var expr = this.parseLogicalAnd();
 		while(this.match(loreline_TokenType.OpOr(false))) {
 			var op = this.previous().type;
-			var binary = this.attachComments(new loreline_NBinary(this.nextNodeId++,expr.pos,expr,op,null));
+			var binary = this.attachComments(new loreline_NBinary(this.nextNodeId(4),expr.pos,expr,op,null));
 			binary.right = this.parseLogicalAnd();
 			binary.pos = binary.pos.extendedTo(binary.right.pos);
 			expr = binary;
@@ -8755,7 +10086,7 @@ loreline_Parser.prototype = {
 		var expr = this.parseEquality();
 		while(this.match(loreline_TokenType.OpAnd(false))) {
 			var op = this.previous().type;
-			var binary = this.attachComments(new loreline_NBinary(this.nextNodeId++,expr.pos,expr,op,null));
+			var binary = this.attachComments(new loreline_NBinary(this.nextNodeId(4),expr.pos,expr,op,null));
 			binary.right = this.parseEquality();
 			binary.pos = binary.pos.extendedTo(binary.right.pos);
 			expr = binary;
@@ -8766,7 +10097,7 @@ loreline_Parser.prototype = {
 		var expr = this.parseComparison();
 		while(this.match(loreline_TokenType.OpEquals) || this.match(loreline_TokenType.OpNotEquals)) {
 			var op = this.previous().type;
-			var binary = this.attachComments(new loreline_NBinary(this.nextNodeId++,expr.pos,expr,op,null));
+			var binary = this.attachComments(new loreline_NBinary(this.nextNodeId(4),expr.pos,expr,op,null));
 			binary.right = this.parseComparison();
 			binary.pos = binary.pos.extendedTo(binary.right.pos);
 			expr = binary;
@@ -8777,7 +10108,7 @@ loreline_Parser.prototype = {
 		var expr = this.parseAdditive();
 		while(this.match(loreline_TokenType.OpGreater) || this.match(loreline_TokenType.OpGreaterEq) || this.match(loreline_TokenType.OpLess) || this.match(loreline_TokenType.OpLessEq)) {
 			var op = this.previous().type;
-			var binary = this.attachComments(new loreline_NBinary(this.nextNodeId++,expr.pos,expr,op,null));
+			var binary = this.attachComments(new loreline_NBinary(this.nextNodeId(4),expr.pos,expr,op,null));
 			binary.right = this.parseAdditive();
 			binary.pos = binary.pos.extendedTo(binary.right.pos);
 			expr = binary;
@@ -8788,7 +10119,7 @@ loreline_Parser.prototype = {
 		var expr = this.parseMultiplicative();
 		while(this.match(loreline_TokenType.OpPlus) || this.match(loreline_TokenType.OpMinus)) {
 			var op = this.previous().type;
-			var binary = this.attachComments(new loreline_NBinary(this.nextNodeId++,expr.pos,expr,op,null));
+			var binary = this.attachComments(new loreline_NBinary(this.nextNodeId(4),expr.pos,expr,op,null));
 			binary.right = this.parseMultiplicative();
 			binary.pos = binary.pos.extendedTo(binary.right.pos);
 			expr = binary;
@@ -8799,7 +10130,7 @@ loreline_Parser.prototype = {
 		var expr = this.parseUnary();
 		while(this.match(loreline_TokenType.OpMultiply) || this.match(loreline_TokenType.OpDivide) || this.match(loreline_TokenType.OpModulo)) {
 			var op = this.previous().type;
-			var binary = this.attachComments(new loreline_NBinary(this.nextNodeId++,expr.pos,expr,op,null));
+			var binary = this.attachComments(new loreline_NBinary(this.nextNodeId(4),expr.pos,expr,op,null));
 			binary.right = this.parseUnary();
 			binary.pos = binary.pos.extendedTo(binary.right.pos);
 			expr = binary;
@@ -8809,7 +10140,7 @@ loreline_Parser.prototype = {
 	,parseUnary: function() {
 		if(this.match(loreline_TokenType.OpNot) || this.match(loreline_TokenType.OpMinus)) {
 			var op = this.previous().type;
-			var unary = this.attachComments(new loreline_NUnary(this.nextNodeId++,this.previous().pos,op,null));
+			var unary = this.attachComments(new loreline_NUnary(this.nextNodeId(4),this.previous().pos,op,null));
 			unary.operand = this.parseUnary();
 			unary.pos = unary.pos.extendedTo(unary.operand.pos);
 			return unary;
@@ -8820,40 +10151,40 @@ loreline_Parser.prototype = {
 		var startPos = this.currentPos();
 		var _g = this.tokens[this.current].type;
 		switch(_g._hx_index) {
-		case 8:
+		case 9:
 			var _g1 = _g.quotes;
 			var _g1 = _g.s;
 			var _g1 = _g.attachments;
 			return this.parseStringLiteral();
-		case 9:
+		case 10:
 			var n = _g.n;
 			this.advance();
-			return this.attachComments(new loreline_NLiteral(this.nextNodeId++,startPos,n,loreline_LiteralType.Number));
-		case 10:
+			return this.attachComments(new loreline_NLiteral(this.nextNodeId(4),startPos,n,loreline_LiteralType.Number));
+		case 11:
 			var b = _g.b;
 			this.advance();
-			return this.attachComments(new loreline_NLiteral(this.nextNodeId++,startPos,b,loreline_LiteralType.Boolean));
-		case 11:
-			this.advance();
-			return this.attachComments(new loreline_NLiteral(this.nextNodeId++,startPos,null,loreline_LiteralType.Null));
+			return this.attachComments(new loreline_NLiteral(this.nextNodeId(4),startPos,b,loreline_LiteralType.Boolean));
 		case 12:
+			this.advance();
+			return this.attachComments(new loreline_NLiteral(this.nextNodeId(4),startPos,null,loreline_LiteralType.Null));
+		case 13:
 			var name = _g.name;
 			if(this.peek().type == loreline_TokenType.Colon) {
 				var fields = [this.parseObjectField()];
-				return new loreline_NLiteral(this.nextNodeId++,startPos.extendedTo(this.prevNonWhitespaceOrComment().pos),fields,loreline_LiteralType.Object(0));
+				return new loreline_NLiteral(this.nextNodeId(4),startPos.extendedTo(this.prevNonWhitespaceOrComment().pos),fields,loreline_LiteralType.Object(0));
 			} else {
 				this.advance();
 				return this.parseIdentifierExpression(startPos,name);
 			}
 			break;
-		case 36:
+		case 37:
 			return this.parseObjectLiteral();
-		case 38:
+		case 39:
 			this.advance();
 			var expr = this.parseExpression();
 			this.expect(loreline_TokenType.RParen);
 			return expr;
-		case 40:
+		case 41:
 			return this.parseArrayLiteral();
 		default:
 			throw haxe_Exception.thrown(new loreline_ParseError("Unexpected token in expression",this.currentPos()));
@@ -8863,7 +10194,7 @@ loreline_Parser.prototype = {
 		var stringLiteralPos = this.currentPos();
 		var parts = [];
 		var _g = this.tokens[this.current].type;
-		if(_g._hx_index == 8) {
+		if(_g._hx_index == 9) {
 			var quotes = _g.quotes;
 			var content = _g.s;
 			var attachments = _g.attachments;
@@ -8872,13 +10203,13 @@ loreline_Parser.prototype = {
 			if(attachments == null || attachments.length == 0) {
 				var partPos = this.makeStringPartPosition(startPos,content,0);
 				partPos.length = startPos.length;
-				var literalId = this.nextNodeId++;
-				var partId = this.nextNodeId++;
+				var literalId = this.nextNodeId(4);
+				var partId = this.nextNodeId(4);
 				parts.push(new loreline_NStringPart(partId,partPos,loreline_StringPartType.Raw(content)));
 				this.advance();
 				return this.attachComments(new loreline_NStringLiteral(literalId,stringLiteralPos,quotes,parts));
 			}
-			var stringLiteral = this.attachComments(new loreline_NStringLiteral(this.nextNodeId++,stringLiteralPos,quotes,parts));
+			var stringLiteral = this.attachComments(new loreline_NStringLiteral(this.nextNodeId(4),stringLiteralPos,quotes,parts));
 			var _g = 0;
 			var _g1 = attachments.length;
 			while(_g < _g1) {
@@ -8897,7 +10228,7 @@ loreline_Parser.prototype = {
 					if(start > currentPos) {
 						var partPos = this.makeStringPartPosition(startPos,content,currentPos);
 						partPos.length = start - currentPos;
-						parts.push(new loreline_NStringPart(this.nextNodeId++,partPos,loreline_StringPartType.Raw(HxOverrides.substr(content,currentPos,start - currentPos))));
+						parts.push(new loreline_NStringPart(this.nextNodeId(4),partPos,loreline_StringPartType.Raw(HxOverrides.substr(content,currentPos,start - currentPos))));
 					}
 					parts.push(this.parseStringInterpolation(braces,inTag,tokens,start,length,content));
 					currentPos = start + length;
@@ -8912,7 +10243,7 @@ loreline_Parser.prototype = {
 					if(start1 > currentPos) {
 						var partPos1 = this.makeStringPartPosition(startPos,content,currentPos);
 						partPos1.length = start1 - currentPos;
-						parts.push(new loreline_NStringPart(this.nextNodeId++,partPos1,loreline_StringPartType.Raw(HxOverrides.substr(content,currentPos,start1 - currentPos))));
+						parts.push(new loreline_NStringPart(this.nextNodeId(4),partPos1,loreline_StringPartType.Raw(HxOverrides.substr(content,currentPos,start1 - currentPos))));
 					}
 					parts.push(this.parseStringTag(closing,start1,length1,content,quotes,attachments));
 					currentPos = start1 + length1;
@@ -8922,7 +10253,7 @@ loreline_Parser.prototype = {
 			if(currentPos < content.length) {
 				var partPos = this.makeStringPartPosition(startPos,content,currentPos);
 				partPos.length = content.length - currentPos;
-				parts.push(new loreline_NStringPart(this.nextNodeId++,partPos,loreline_StringPartType.Raw(HxOverrides.substr(content,currentPos,null))));
+				parts.push(new loreline_NStringPart(this.nextNodeId(4),partPos,loreline_StringPartType.Raw(HxOverrides.substr(content,currentPos,null))));
 			}
 			this.advance();
 			return stringLiteral;
@@ -8949,7 +10280,9 @@ loreline_Parser.prototype = {
 	,makeAccess: function(pos,target,name,namePos) {
 		if(name != null) {
 			if(name.length == 0) {
-				this.addError(new loreline_ParseError("Invalid access: " + (name != null ? "'" + name + "'" : "null"),pos));
+				if(this.errors == null || this.errors.length == 0) {
+					this.addError(new loreline_ParseError("Invalid access: " + (name != null ? "'" + name + "'" : "null"),pos));
+				}
 			}
 			if(target != null) {
 				if(namePos != null) {
@@ -8962,7 +10295,7 @@ loreline_Parser.prototype = {
 				pos = new loreline_Position(pos.line,pos.column,pos.offset,tmp != null ? tmp : name.length);
 			}
 		}
-		return new loreline_NAccess(this.nextNodeId++,pos,target,name);
+		return new loreline_NAccess(this.nextNodeId(4),pos,target,name);
 	}
 	,parseStringInterpolation: function(braces,inTag,tokens,start,length,content) {
 		var tmp = tokens[0];
@@ -8973,8 +10306,8 @@ loreline_Parser.prototype = {
 			var tmp = tokens[0];
 			var tmp1 = tmp != null ? tmp.pos : null;
 			this.addError(new loreline_ParseError("Empty interpolation",tmp1 != null ? tmp1 : this.currentPos()));
-			var tmp = this.nextNodeId++;
-			var tmp1 = this.nextNodeId++;
+			var tmp = this.nextNodeId(4);
+			var tmp1 = this.nextNodeId(4);
 			var tmp2 = tokens[0];
 			var tmp3 = tmp2 != null ? tmp2.pos : null;
 			return new loreline_NStringPart(tmp,pos,loreline_StringPartType.Expr(new loreline_NLiteral(tmp1,tmp3 != null ? tmp3 : this.currentPos(),null,loreline_LiteralType.Null)));
@@ -8989,7 +10322,7 @@ loreline_Parser.prototype = {
 				++i;
 				var _g = token.type;
 				switch(_g._hx_index) {
-				case 12:
+				case 13:
 					var name = _g.name;
 					if(target == null) {
 						target = this.attachComments(this.makeAccess(token.pos,null,name,null));
@@ -8997,30 +10330,30 @@ loreline_Parser.prototype = {
 						target = this.attachComments(this.makeAccess(token.pos,target,name,token.pos));
 					} else {
 						this.addError(new loreline_ParseError("Missing dot in field access",token.pos));
-						var tmp = this.nextNodeId++;
-						var tmp1 = this.nextNodeId++;
+						var tmp = this.nextNodeId(4);
+						var tmp1 = this.nextNodeId(4);
 						var tmp2 = tokens[0];
 						var tmp3 = tmp2 != null ? tmp2.pos : null;
 						return new loreline_NStringPart(tmp,pos,loreline_StringPartType.Expr(new loreline_NLiteral(tmp1,tmp3 != null ? tmp3 : this.currentPos(),null,loreline_LiteralType.Null)));
 					}
 					prevIsDot = false;
 					break;
-				case 35:
+				case 36:
 					if(target == null) {
 						this.addError(new loreline_ParseError("Leading dot in field access",token.pos));
-						var tmp4 = this.nextNodeId++;
-						var tmp5 = this.nextNodeId++;
+						var tmp4 = this.nextNodeId(4);
+						var tmp5 = this.nextNodeId(4);
 						var tmp6 = tokens[0];
 						var tmp7 = tmp6 != null ? tmp6.pos : null;
 						return new loreline_NStringPart(tmp4,pos,loreline_StringPartType.Expr(new loreline_NLiteral(tmp5,tmp7 != null ? tmp7 : this.currentPos(),null,loreline_LiteralType.Null)));
 					}
 					prevIsDot = true;
 					break;
-				case 38:
+				case 39:
 					if(target == null) {
 						this.addError(new loreline_ParseError("Function call without target",token.pos));
-						var tmp8 = this.nextNodeId++;
-						var tmp9 = this.nextNodeId++;
+						var tmp8 = this.nextNodeId(4);
+						var tmp9 = this.nextNodeId(4);
 						var tmp10 = tokens[0];
 						var tmp11 = tmp10 != null ? tmp10.pos : null;
 						return new loreline_NStringPart(tmp8,pos,loreline_StringPartType.Expr(new loreline_NLiteral(tmp9,tmp11 != null ? tmp11 : this.currentPos(),null,loreline_LiteralType.Null)));
@@ -9033,7 +10366,7 @@ loreline_Parser.prototype = {
 						var t = tokens[i];
 						++i;
 						switch(t.type._hx_index) {
-						case 34:
+						case 35:
 							if(parenLevel == 1) {
 								if(currentArgTokens.length > 0) {
 									argTokens.push(currentArgTokens);
@@ -9043,11 +10376,11 @@ loreline_Parser.prototype = {
 								currentArgTokens.push(t);
 							}
 							break;
-						case 38:
+						case 39:
 							++parenLevel;
 							currentArgTokens.push(t);
 							break;
-						case 39:
+						case 40:
 							--parenLevel;
 							if(parenLevel > 0) {
 								currentArgTokens.push(t);
@@ -9061,8 +10394,8 @@ loreline_Parser.prototype = {
 					}
 					if(parenLevel > 0) {
 						this.addError(new loreline_ParseError("Unterminated function call",callStart));
-						var tmp12 = this.nextNodeId++;
-						var tmp13 = this.nextNodeId++;
+						var tmp12 = this.nextNodeId(4);
+						var tmp13 = this.nextNodeId(4);
 						var tmp14 = tokens[0];
 						var tmp15 = tmp14 != null ? tmp14.pos : null;
 						return new loreline_NStringPart(tmp12,pos,loreline_StringPartType.Expr(new loreline_NLiteral(tmp13,tmp15 != null ? tmp15 : this.currentPos(),null,loreline_LiteralType.Null)));
@@ -9073,18 +10406,18 @@ loreline_Parser.prototype = {
 						var argTokenGroup = argTokens[_g1];
 						++_g1;
 						var tempParser = new loreline_Parser(argTokenGroup);
-						tempParser.nextNodeId = this.nextNodeId;
+						tempParser.currentNodeId = this.currentNodeId;
 						args.push(tempParser.parseExpression());
-						this.nextNodeId = tempParser.nextNodeId;
+						this.currentNodeId = tempParser.currentNodeId;
 					}
-					target = this.attachComments(new loreline_NCall(this.nextNodeId++,callStart.extendedTo(tokens[i - 1].pos),target,args));
+					target = this.attachComments(new loreline_NCall(this.nextNodeId(4),callStart.extendedTo(tokens[i - 1].pos),target,args));
 					prevIsDot = false;
 					break;
-				case 40:
+				case 41:
 					if(target == null) {
 						this.addError(new loreline_ParseError("Array access without target",token.pos));
-						var tmp16 = this.nextNodeId++;
-						var tmp17 = this.nextNodeId++;
+						var tmp16 = this.nextNodeId(4);
+						var tmp17 = this.nextNodeId(4);
 						var tmp18 = tokens[0];
 						var tmp19 = tmp18 != null ? tmp18.pos : null;
 						return new loreline_NStringPart(tmp16,pos,loreline_StringPartType.Expr(new loreline_NLiteral(tmp17,tmp19 != null ? tmp19 : this.currentPos(),null,loreline_LiteralType.Null)));
@@ -9097,11 +10430,11 @@ loreline_Parser.prototype = {
 						var t1 = tokens[i];
 						++i;
 						switch(t1.type._hx_index) {
-						case 40:
+						case 41:
 							++bracketLevel;
 							arrayTokens.push(t1);
 							break;
-						case 41:
+						case 42:
 							--bracketLevel;
 							if(bracketLevel > 0) {
 								arrayTokens.push(t1);
@@ -9114,25 +10447,25 @@ loreline_Parser.prototype = {
 					}
 					if(bracketLevel > 0) {
 						this.addError(new loreline_ParseError("Unterminated array access",arrayStart));
-						var tmp20 = this.nextNodeId++;
-						var tmp21 = this.nextNodeId++;
+						var tmp20 = this.nextNodeId(4);
+						var tmp21 = this.nextNodeId(4);
 						var tmp22 = tokens[0];
 						var tmp23 = tmp22 != null ? tmp22.pos : null;
 						return new loreline_NStringPart(tmp20,pos,loreline_StringPartType.Expr(new loreline_NLiteral(tmp21,tmp23 != null ? tmp23 : this.currentPos(),null,loreline_LiteralType.Null)));
 					}
 					var tempParser1 = new loreline_Parser(arrayTokens);
-					tempParser1.nextNodeId = this.nextNodeId;
+					tempParser1.currentNodeId = this.currentNodeId;
 					var indexExpr = tempParser1.parseExpression();
-					this.nextNodeId = tempParser1.nextNodeId;
+					this.currentNodeId = tempParser1.currentNodeId;
 					var accessPos = pos.extendedTo(tokens[i - 1].pos);
 					accessPos.length += 1;
-					target = this.attachComments(new loreline_NArrayAccess(this.nextNodeId++,accessPos,target,indexExpr));
+					target = this.attachComments(new loreline_NArrayAccess(this.nextNodeId(4),accessPos,target,indexExpr));
 					prevIsDot = false;
 					break;
 				default:
 					this.addError(new loreline_ParseError("Unexpected token in field access: " + Std.string(token.type),token.pos));
-					var tmp24 = this.nextNodeId++;
-					var tmp25 = this.nextNodeId++;
+					var tmp24 = this.nextNodeId(4);
+					var tmp25 = this.nextNodeId(4);
 					var tmp26 = tokens[0];
 					var tmp27 = tmp26 != null ? tmp26.pos : null;
 					return new loreline_NStringPart(tmp24,pos,loreline_StringPartType.Expr(new loreline_NLiteral(tmp25,tmp27 != null ? tmp27 : this.currentPos(),null,loreline_LiteralType.Null)));
@@ -9144,15 +10477,15 @@ loreline_Parser.prototype = {
 			expr = target;
 		} else {
 			var tempParser = new loreline_Parser(tokens);
-			tempParser.nextNodeId = this.nextNodeId;
+			tempParser.currentNodeId = this.currentNodeId;
 			expr = tempParser.parseExpression();
-			this.nextNodeId = tempParser.nextNodeId;
+			this.currentNodeId = tempParser.currentNodeId;
 			if(!tempParser.isAtEnd()) {
 				this.addError(new loreline_ParseError("Unexpected tokens after interpolation expression",tempParser.tokens[tempParser.current].pos));
 			}
 		}
 		var partPos = new loreline_Position(pos.line,pos.column + (braces ? 1 : 0),pos.offset - (braces ? 2 : 0),length);
-		return new loreline_NStringPart(this.nextNodeId++,partPos,loreline_StringPartType.Expr(expr));
+		return new loreline_NStringPart(this.nextNodeId(4),partPos,loreline_StringPartType.Expr(expr));
 	}
 	,parseStringTag: function(closing,start,length,content,quotes,attachments) {
 		var pos = this.makeStringPartPosition(this.currentPos(),content,start);
@@ -9164,7 +10497,7 @@ loreline_Parser.prototype = {
 		var innerStart = start + offsetStart;
 		var innerLength = length - (closing ? 3 : 2);
 		var innerEnd = innerStart + innerLength;
-		var tagId = this.nextNodeId++;
+		var tagId = this.nextNodeId(4);
 		var hasAttachmentsInRange = false;
 		if(attachments != null) {
 			var _g = 0;
@@ -9196,12 +10529,12 @@ loreline_Parser.prototype = {
 		if(!hasAttachmentsInRange) {
 			var partPos = this.makeStringPartPosition(pos,content,innerStart);
 			partPos.length = innerLength;
-			var literalId = this.nextNodeId++;
-			var partId = this.nextNodeId++;
+			var literalId = this.nextNodeId(4);
+			var partId = this.nextNodeId(4);
 			return new loreline_NStringPart(tagId,pos,loreline_StringPartType.Tag(closing,this.attachComments(new loreline_NStringLiteral(literalId,partPos,0,[new loreline_NStringPart(partId,partPos,loreline_StringPartType.Raw(HxOverrides.substr(content,innerStart,innerLength)))]))));
 		}
 		var parts = [];
-		var stringLiteral = this.attachComments(new loreline_NStringLiteral(this.nextNodeId++,pos,0,parts));
+		var stringLiteral = this.attachComments(new loreline_NStringLiteral(this.nextNodeId(4),pos,0,parts));
 		var currentPos = innerStart;
 		if(attachments != null) {
 			var _g = 0;
@@ -9221,7 +10554,7 @@ loreline_Parser.prototype = {
 						if(aStart > currentPos) {
 							var partPos = this.makeStringPartPosition(pos,HxOverrides.substr(content,start,null),currentPos - start + offsetStart);
 							partPos.length = aStart - currentPos;
-							parts.push(new loreline_NStringPart(this.nextNodeId++,partPos,loreline_StringPartType.Raw(HxOverrides.substr(content,currentPos,aStart - currentPos))));
+							parts.push(new loreline_NStringPart(this.nextNodeId(4),partPos,loreline_StringPartType.Raw(HxOverrides.substr(content,currentPos,aStart - currentPos))));
 						}
 						parts.push(this.parseStringInterpolation(braces,true,tokens,aStart,aLength,content));
 						currentPos = aEnd;
@@ -9238,13 +10571,13 @@ loreline_Parser.prototype = {
 		if(currentPos < innerEnd) {
 			var partPos = this.makeStringPartPosition(pos,HxOverrides.substr(content,start,null),currentPos - start + offsetStart);
 			partPos.length = innerStart + innerEnd - currentPos;
-			parts.push(new loreline_NStringPart(this.nextNodeId++,partPos,loreline_StringPartType.Raw(HxOverrides.substr(content,currentPos,innerEnd - currentPos))));
+			parts.push(new loreline_NStringPart(this.nextNodeId(4),partPos,loreline_StringPartType.Raw(HxOverrides.substr(content,currentPos,innerEnd - currentPos))));
 		}
 		return new loreline_NStringPart(tagId,pos,loreline_StringPartType.Tag(closing,stringLiteral));
 	}
 	,parseIdentifierExpression: function(startPos,name) {
 		var expr = this.attachComments(this.makeAccess(startPos,null,name,null));
-		while(true) if(this.match(loreline_TokenType.Dot)) {
+		while(true) if(this.match(loreline_TokenType.Dot,false)) {
 			var prop = null;
 			var propPos = this.currentPos();
 			if(this.checkIdentifier()) {
@@ -9258,10 +10591,10 @@ loreline_Parser.prototype = {
 			var index = this.parseExpression();
 			this.expect(loreline_TokenType.RBracket);
 			var accessPos = startPos.extendedTo(this.previous().pos);
-			expr = this.attachComments(new loreline_NArrayAccess(this.nextNodeId++,accessPos,expr,index));
+			expr = this.attachComments(new loreline_NArrayAccess(this.nextNodeId(4),accessPos,expr,index));
 		} else if(this.match(loreline_TokenType.LParen)) {
 			var args = this.parseCallArguments();
-			expr = this.attachComments(new loreline_NCall(this.nextNodeId++,startPos.extendedTo(this.previous().pos),expr,args));
+			expr = this.attachComments(new loreline_NCall(this.nextNodeId(4),startPos.extendedTo(this.previous().pos),expr,args));
 		} else {
 			break;
 		}
@@ -9270,7 +10603,7 @@ loreline_Parser.prototype = {
 	,parseArrayLiteral: function() {
 		var startPos = this.currentPos();
 		var elements = [];
-		var literal = new loreline_NLiteral(this.nextNodeId++,startPos,elements,loreline_LiteralType.Array);
+		var literal = new loreline_NLiteral(this.nextNodeId(4),startPos,elements,loreline_LiteralType.Array);
 		this.expect(loreline_TokenType.LBracket);
 		this.attachComments(literal);
 		var needsSeparator = false;
@@ -9304,7 +10637,7 @@ loreline_Parser.prototype = {
 		var fields = [];
 		var blockEnd = this.parseBlockStart().type == loreline_TokenType.Indent ? loreline_TokenType.Unindent : loreline_TokenType.RBrace;
 		var style = blockEnd == loreline_TokenType.RBrace ? 1 : 0;
-		var literal = new loreline_NLiteral(this.nextNodeId++,blockEnd != loreline_TokenType.RBrace ? this.nextNonWhitespaceOrComment().pos : startPos,fields,loreline_LiteralType.Object(style));
+		var literal = new loreline_NLiteral(this.nextNodeId(4),blockEnd != loreline_TokenType.RBrace ? this.nextNonWhitespaceOrComment().pos : startPos,fields,loreline_LiteralType.Object(style));
 		this.attachComments(literal);
 		var needsSeparator = false;
 		while(!this.check(blockEnd) && !this.isAtEnd()) {
@@ -9356,7 +10689,7 @@ loreline_Parser.prototype = {
 			if(((_g1) instanceof loreline_ParseError)) {
 				var e = _g1;
 				this.addError(e);
-				expr = new loreline_NLiteral(this.nextNodeId++,this.currentPos(),null,loreline_LiteralType.Null);
+				expr = new loreline_NLiteral(this.nextNodeId(4),this.currentPos(),null,loreline_LiteralType.Null);
 			} else {
 				throw _g;
 			}
@@ -9366,9 +10699,12 @@ loreline_Parser.prototype = {
 		}
 		return expr;
 	}
-	,match: function(type) {
+	,match: function(type,advanceLineBreaks) {
+		if(advanceLineBreaks == null) {
+			advanceLineBreaks = true;
+		}
 		if(this.check(type)) {
-			this.advance();
+			this.advance(advanceLineBreaks);
 			return true;
 		}
 		return false;
@@ -9386,7 +10722,7 @@ loreline_Parser.prototype = {
 		} else {
 			var error = new loreline_ParseError("Expected " + Std.string(type) + ", got " + (this.isAtEnd() ? "EoF" : Std.string(this.tokens[this.current].type)),this.tokens[Math.min(this.current,this.tokens.length - 1) | 0].pos);
 			switch(type._hx_index) {
-			case 37:case 39:case 45:
+			case 38:case 40:case 46:
 				this.addError(error);
 				return new loreline_Token(type,this.currentPos());
 			default:
@@ -9396,7 +10732,7 @@ loreline_Parser.prototype = {
 	}
 	,checkIdentifier: function() {
 		var _g = this.tokens[this.current].type;
-		if(_g._hx_index == 12) {
+		if(_g._hx_index == 13) {
 			var name = _g.name;
 			return true;
 		} else {
@@ -9405,7 +10741,7 @@ loreline_Parser.prototype = {
 	}
 	,expectIdentifier: function() {
 		var _g = this.tokens[this.current].type;
-		if(_g._hx_index == 12) {
+		if(_g._hx_index == 13) {
 			var name = _g.name;
 			this.advance();
 			return name;
@@ -9476,7 +10812,7 @@ loreline_Parser.prototype = {
 		while(!this.isAtEnd()) {
 			var _g = this.tokens[this.current].type;
 			switch(_g._hx_index) {
-			case 8:
+			case 9:
 				var _g1 = _g.quotes;
 				var _g2 = _g.s;
 				var _g3 = _g.attachments;
@@ -9485,13 +10821,13 @@ loreline_Parser.prototype = {
 				}
 				this.advance();
 				break;
-			case 32:
+			case 33:
 				this.advance();
 				if(this.check(loreline_TokenType.Dot) || loreline_TokenTypeHelpers.isIdentifier(this.tokens[this.current].type)) {
 					this.advance();
 				}
 				return;
-			case 1:case 2:case 3:case 4:case 5:case 37:case 44:
+			case 1:case 2:case 3:case 4:case 5:case 38:case 45:
 				return;
 			default:
 				this.advance();
@@ -9500,7 +10836,7 @@ loreline_Parser.prototype = {
 	}
 	,requiresNewLine: function() {
 		switch(this.tokens[this.current].type._hx_index) {
-		case 6:case 32:case 37:
+		case 6:case 33:case 38:
 			return false;
 		default:
 			return true;
@@ -9514,12 +10850,6 @@ loreline_Parser.prototype = {
 			this.errors.push(error);
 		}
 		return error;
-	}
-	,getErrors: function() {
-		if(this.errors == null) {
-			this.errors = [];
-		}
-		return this.errors;
 	}
 	,__class__: loreline_Parser
 };
@@ -9791,7 +11121,7 @@ loreline_Printer.prototype = {
 	}
 	,printScript: function(script) {
 		var _g = 0;
-		var _g1 = script.declarations;
+		var _g1 = script.body;
 		while(_g < _g1.length) {
 			var decl = _g1[_g];
 			++_g;
@@ -10022,7 +11352,7 @@ loreline_Printer.prototype = {
 		while(_g < _g1.length) {
 			var part = _g1[_g];
 			++_g;
-			var _g2 = part.type;
+			var _g2 = part.partType;
 			switch(_g2._hx_index) {
 			case 0:
 				var text = _g2.text;
@@ -10056,7 +11386,7 @@ loreline_Printer.prototype = {
 	}
 	,printLiteral: function(lit) {
 		this.printLeadingComments(lit);
-		var _g = lit.type;
+		var _g = lit.literalType;
 		switch(_g._hx_index) {
 		case 0:
 			this.write(lit.value == null ? "null" : Std.string(lit.value));
@@ -10157,11 +11487,11 @@ loreline_Printer.prototype = {
 		if(!skipParen) {
 			var _g = binary.op;
 			switch(_g._hx_index) {
-			case 29:
+			case 30:
 				var word = _g.word;
 				needsParens = true;
 				break;
-			case 30:
+			case 31:
 				var word = _g.word;
 				needsParens = true;
 				break;
@@ -10206,53 +11536,53 @@ loreline_Printer.prototype = {
 	}
 	,getOperator: function(op) {
 		switch(op._hx_index) {
-		case 13:
-			return "=";
 		case 14:
-			return "+=";
+			return "=";
 		case 15:
-			return "-=";
+			return "+=";
 		case 16:
-			return "*=";
+			return "-=";
 		case 17:
-			return "/=";
+			return "*=";
 		case 18:
-			return "+";
+			return "/=";
 		case 19:
-			return "-";
+			return "+";
 		case 20:
-			return "*";
+			return "-";
 		case 21:
-			return "/";
+			return "*";
 		case 22:
-			return "%";
+			return "/";
 		case 23:
-			return "==";
+			return "%";
 		case 24:
-			return "!=";
+			return "==";
 		case 25:
-			return ">";
+			return "!=";
 		case 26:
-			return "<";
+			return ">";
 		case 27:
-			return ">=";
+			return "<";
 		case 28:
-			return "<=";
+			return ">=";
 		case 29:
+			return "<=";
+		case 30:
 			if(op.word) {
 				return "and";
 			} else {
 				return "&&";
 			}
 			break;
-		case 30:
+		case 31:
 			if(op.word) {
 				return "or";
 			} else {
 				return "||";
 			}
 			break;
-		case 31:
+		case 32:
 			return "!";
 		default:
 			throw haxe_Exception.thrown("Unsupported operator: " + Std.string(op));
@@ -10269,9 +11599,9 @@ loreline_Quotes.toString = function(this1) {
 		return "DoubleQuotes";
 	}
 };
-var loreline_Script = function(id,pos,declarations) {
+var loreline_Script = function(id,pos,body) {
 	loreline_Node.call(this,id,pos);
-	this.declarations = declarations;
+	this.body = body;
 };
 loreline_Script.__name__ = "loreline.Script";
 loreline_Script.__super__ = loreline_Node;
@@ -10280,23 +11610,23 @@ loreline_Script.prototype = $extend(loreline_Node.prototype,{
 		var json = loreline_Node.prototype.toJson.call(this);
 		var _g = [];
 		var _g1 = 0;
-		var _g2 = this.declarations;
+		var _g2 = this.body;
 		while(_g1 < _g2.length) {
 			var decl = _g2[_g1];
 			++_g1;
 			_g.push(decl.toJson());
 		}
-		json.declarations = _g;
+		json.body = _g;
 		return json;
 	}
 	,each: function(handleNode) {
 		loreline_Node.prototype.each.call(this,handleNode);
-		if(this.declarations != null) {
+		if(this.body != null) {
 			var _g = 0;
-			var _g1 = this.declarations.length;
+			var _g1 = this.body.length;
 			while(_g < _g1) {
 				var i = _g++;
-				var child = this.declarations[i];
+				var child = this.body[i];
 				handleNode(child,this);
 				child.each(handleNode);
 			}
@@ -10355,7 +11685,7 @@ loreline_lsp_SymbolPrinter.prototype = {
 	,printScript: function(script) {
 		var symbols = [];
 		var _g = 0;
-		var _g1 = script.declarations;
+		var _g1 = script.body;
 		while(_g < _g1.length) {
 			var decl = _g1[_g];
 			++_g;
@@ -10564,6 +11894,8 @@ var Enum = { };
 js_Boot.__toStr = ({ }).toString;
 LorelineServer.server = new loreline_lsp_Server();
 LorelineServer.nextRequestId = 1;
+loreline_Int64Map.INITIAL_SIZE = 16;
+loreline_Int64Map.LOAD_FACTOR = 0.75;
 loreline_TokenStackType.ChoiceBrace = 0;
 loreline_TokenStackType.ChoiceIndent = 1;
 loreline_TokenStackType.StateBrace = 2;
@@ -10595,6 +11927,9 @@ loreline_Lexer.KEYWORDS = (function($this) {
 	$r = _g;
 	return $r;
 }(this));
+loreline_NodeId.OFFSET = 32768;
+loreline_NodeId.MAX = 65535;
+loreline_NodeId.UNDEFINED = loreline_NodeId._new(0,0,0,0);
 loreline_BlockStyle.Plain = 0;
 loreline_BlockStyle.Braces = 1;
 loreline_Parser.parse_parsing = false;
