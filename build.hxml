@@ -3,6 +3,8 @@
 -lib tracker
 -lib hxnodejs
 -lib loreline
+-lib hscript
+-D hscriptPos
 -js vscode-loreline.js
 -D js-source-map
 VscodeLoreline
@@ -14,6 +16,8 @@ VscodeLoreline
 -lib tracker
 -lib hxnodejs
 -lib loreline
+-lib hscript
+-D hscriptPos
 -js loreline-server.js
 -D js-source-map
 --main LorelineServer

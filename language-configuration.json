@@ -23,19 +23,19 @@
         ["\"", "\""]
     ],
     "indentationRules": {
-        "increaseIndentPattern": "^(?:\\s*(?:/\\*[^*]*\\*+(?:[^/*][^*]*\\*+)*/\\s*)*)(beat|choice|if|else\\s+if|else|state|character\\s+(?:/\\*[^*]*\\*+(?:[^/*][^*]*\\*+)*/\\s*)*[\\w\\d_]+)\\b.*(?:/[/*].*)?$|^.*\\{\\s*$",
+        "increaseIndentPattern": "^(?:\\s*(?:/\\*[^*]*\\*+(?:[^/*][^*]*\\*+)*/\\s*)*)((beat|choice|if|state|character\\s+(?:/\\*[^*]*\\*+(?:[^/*][^*]*\\*+)*/\\s*)*[\\w\\d_]+|while|do|try|catch|for|switch|case|class|enum|abstract|default)\\b.*(?:/[/*].*)?|\\s*function\\s+(?:/\\*[^*]*\\*+(?:[^/*][^*]*\\*+)*/\\s*)*(?:[\\w\\d_]+)?\\s*(?:/\\*[^*]*\\*+(?:[^/*][^*]*\\*+)*/\\s*)*\\([^)]*\\))$|^.*\\{\\s*$",
         "decreaseIndentPattern": "^\\s*}\\s*$|^\\s*(else\\s+if|else)\\b"
     },
     "onEnterRules": [
         {
-            "beforeText": "^(?:\\s*(?:/\\*[^*]*\\*+(?:[^/*][^*]*\\*+)*/\\s*)*)(beat|choice|if|else\\s+if|else|state|character\\s+(?:/\\*[^*]*\\*+(?:[^/*][^*]*\\*+)*/\\s*)*[\\w\\d_]+)\\b.*(?:/[/*].*)?$",
+            "beforeText": "^(?:\\s*(?:/\\*[^*]*\\*+(?:[^/*][^*]*\\*+)*/\\s*)*)((beat|choice|if|else\\s+if|else|state|character\\s+(?:/\\*[^*]*\\*+(?:[^/*][^*]*\\*+)*/\\s*)*[\\w\\d_]+|while|do|try|catch|for|switch|case|class|enum|abstract|default)\\b.*(?:/[/*].*)?|\\s*function\\s+(?:/\\*[^*]*\\*+(?:[^/*][^*]*\\*+)*/\\s*)*(?:[\\w\\d_]+)?\\s*(?:/\\*[^*]*\\*+(?:[^/*][^*]*\\*+)*/\\s*)*\\([^)]*\\))$",
             "action": { "indent": "indent" }
         }
     ],
     "folding": {
         "offSide": true,
         "markers": {
-            "start": "^\\s*\\b(beat|state|character|choice)\\b",
+            "start": "^\\s*\\b(beat|state|character|choice|function|while|do|try|catch|for|switch|case|class|enum|abstract)\\b",
             "end": "^\\s*$\\n(?!\\s+\\S)"
         }
     }

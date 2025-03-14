@@ -50,19 +50,56 @@ HxOverrides.substr = function(s,pos,len) {
 	}
 	return s.substr(pos,len);
 };
+HxOverrides.remove = function(a,obj) {
+	var i = a.indexOf(obj);
+	if(i == -1) {
+		return false;
+	}
+	a.splice(i,1);
+	return true;
+};
 HxOverrides.now = function() {
 	return Date.now();
+};
+var IntIterator = function(min,max) {
+	this.min = min;
+	this.max = max;
+};
+IntIterator.__name__ = "IntIterator";
+IntIterator.prototype = {
+	hasNext: function() {
+		return this.min < this.max;
+	}
+	,next: function() {
+		return this.min++;
+	}
+	,__class__: IntIterator
+};
+var Lambda = function() { };
+Lambda.__name__ = "Lambda";
+Lambda.exists = function(it,f) {
+	var x = $getIterator(it);
+	while(x.hasNext()) {
+		var x1 = x.next();
+		if(f(x1)) {
+			return true;
+		}
+	}
+	return false;
 };
 var Module = require("module");
 var loreline_lsp_Server = function() {
 	this.shutdown = false;
 	this.initialized = false;
+	this.dirtyDocuments = new haxe_ds_StringMap();
 	this.documentDiagnostics = new haxe_ds_StringMap();
 	this.documentContents = new haxe_ds_StringMap();
+	this.documentImports = new haxe_ds_StringMap();
 	this.documents = new haxe_ds_StringMap();
 	this.RE_ARRAY_ACCESS_BEFORE = new EReg("(\\])((?:\\s*|/\\*(?:[^*]|\\*[^/])*\\*/)*)$","");
 	this.RE_ARROW_BEFORE = new EReg("(->)((?:\\s*|/\\*(?:[^*]|\\*[^/])*\\*/)*)$","");
 	this.RE_IDENTIFIER_BEFORE = new EReg("([a-zA-Z_][a-zA-Z0-9_]*)((?:\\s*|/\\*(?:[^*]|\\*[^/])*\\*/)*)$","");
+	this.isWindows = process.platform === "win32";
 };
 loreline_lsp_Server.__name__ = "loreline.lsp.Server";
 loreline_lsp_Server.prototype = {
@@ -70,6 +107,24 @@ loreline_lsp_Server.prototype = {
 		console.log(message);
 	}
 	,onNotification: function(message) {
+	}
+	,handleFile: function(path,callback) {
+		var uri = this.uriFromPath(path);
+		if(Object.prototype.hasOwnProperty.call(this.documentContents.h,uri)) {
+			callback(this.documentContents.h[uri]);
+			return;
+		}
+		var content = null;
+		try {
+			if(sys_FileSystem.exists(path)) {
+				content = js_node_Fs.readFileSync(path,{ encoding : "utf8"});
+			}
+			this.setDocumentContent(uri,content);
+		} catch( _g ) {
+			var e = haxe_Exception.caught(_g).unwrap();
+			this.onLog("Failed to load content at path: " + path + ", " + (e == null ? "null" : Std.string(e)),{ fileName : "loreline/lsp/Server.hx", lineNumber : 88, className : "loreline.lsp.Server", methodName : "handleFile"});
+		}
+		callback(content);
 	}
 	,handleMessage: function(msg) {
 		try {
@@ -229,49 +284,235 @@ loreline_lsp_Server.prototype = {
 			delete(_this.h[key]);
 		}
 	}
+	,setDocument: function(uri,ast) {
+		this.documents.h[uri] = ast;
+		var _this = this.dirtyDocuments;
+		if(Object.prototype.hasOwnProperty.call(_this.h,uri)) {
+			delete(_this.h[uri]);
+		}
+	}
+	,setDocumentContent: function(uri,content) {
+		var previous = this.documentContents.h[uri];
+		if(previous != content) {
+			this.documentContents.h[uri] = content;
+			this.markDependentDocumentsDirty(uri);
+		}
+	}
+	,markDependentDocumentsDirty: function(uri) {
+		var h = this.documentImports.h;
+		var _g_h = h;
+		var _g_keys = Object.keys(h);
+		var _g_length = _g_keys.length;
+		var _g_current = 0;
+		while(_g_current < _g_length) {
+			var key = _g_keys[_g_current++];
+			var _g_key = key;
+			var _g_value = _g_h[key];
+			var key1 = _g_key;
+			var imports = _g_value;
+			var _g = 0;
+			var _g1 = imports.length;
+			while(_g < _g1) {
+				var i = _g++;
+				var imp = imports[i];
+				if(imp == uri) {
+					this.dirtyDocuments.h[key1] = true;
+					break;
+				}
+			}
+		}
+	}
 	,updateDocument: function(uri,content,runDiagnostics) {
 		if(runDiagnostics == null) {
 			runDiagnostics = true;
 		}
-		this.documentContents.h[uri] = content;
+		var _gthis = this;
+		this.setDocumentContent(uri,content);
 		if(runDiagnostics) {
 			this.documentDiagnostics.h[uri] = [];
-			try {
-				var lexer = new loreline_Lexer(content);
-				var parser = new loreline_Parser(lexer.tokenize());
-				var ast = parser.parse();
-				this.documents.h[uri] = ast;
-				var errors = parser.getErrors();
-				if(errors != null && errors.length > 0) {
+			var errors = [];
+			this.fetchAst(uri,content,function(lexer,parser,ast) {
+				if(ast != null) {
+					_gthis.setDocument(uri,ast);
+					var lens = new loreline_Lens(ast);
+					var this1 = _gthis.documentImports;
+					var _g = [];
+					var _g1 = 0;
+					var _g2 = lens.getImportedPaths(_gthis.pathFromUri(uri));
+					while(_g1 < _g2.length) {
+						var path = _g2[_g1];
+						++_g1;
+						_g.push(_gthis.uriFromPath(path));
+					}
+					this1.h[uri] = _g;
+					var errors1 = parser.getErrors();
+					if(errors1 != null && errors1.length > 0) {
+						var _g = 0;
+						while(_g < errors1.length) {
+							var error = errors1[_g];
+							++_g;
+							_gthis.addDiagnostic(uri,error.pos,error.message,1);
+						}
+					}
+					var _g = 0;
+					var _g1 = lens.getNodesOfType(loreline_NFunctionDecl,false);
+					while(_g < _g1.length) {
+						var func = _g1[_g];
+						++_g;
+						var funcHscript = lens.getFuncHscript(func);
+						if(funcHscript.error != null) {
+							_gthis.addDiagnostic(uri,funcHscript.error.pos,funcHscript.error.message,1);
+						}
+					}
+					var _g = 0;
+					var _g1 = lens.getNodesOfType(loreline_NTransition,false);
+					while(_g < _g1.length) {
+						var transition = _g1[_g];
+						++_g;
+						if(lens.findBeatByNameFromNode(transition.target,transition) == null) {
+							_gthis.addDiagnostic(uri,transition.targetPos,"Unknown beat: " + transition.target,1);
+						}
+					}
+					var _g = 0;
+					var _g1 = lens.getNodesOfType(loreline_NDialogueStatement,false);
+					while(_g < _g1.length) {
+						var dialogue = _g1[_g];
+						++_g;
+						var characterDecl = lens.findCharacterFromDialogue(dialogue);
+						if(characterDecl == null) {
+							_gthis.addDiagnostic(uri,dialogue.characterPos,"Unknown character: " + dialogue.character,2);
+						}
+					}
+					_gthis.validateDocument(uri,ast);
+				} else {
 					var _g = 0;
 					while(_g < errors.length) {
-						var error = errors[_g];
+						var e = errors[_g];
 						++_g;
-						this.addDiagnostic(uri,error.pos,error.message,1);
+						if(((e) instanceof loreline_Error)) {
+							var err = e;
+							_gthis.addDiagnostic(uri,err.pos,err.message,1);
+						} else {
+							_gthis.addDiagnostic(uri,null,e == null ? "null" : Std.string(e),1);
+						}
 					}
 				}
-				this.validateDocument(uri,ast);
-			} catch( _g ) {
-				var _g1 = haxe_Exception.caught(_g).unwrap();
-				if(((_g1) instanceof loreline_Error)) {
-					var e = _g1;
-					this.addDiagnostic(uri,e.pos,e.message,1);
-				} else {
-					var e = _g1;
-					this.addDiagnostic(uri,null,Std.string(e),1);
-				}
-			}
+			},function(e) {
+				errors.push(e);
+			});
 			this.publishDiagnostics(uri);
 		} else {
-			try {
-				var lexer = new loreline_Lexer(content);
-				var parser = new loreline_Parser(lexer.tokenize());
-				var this1 = this.documents;
-				var value = parser.parse();
-				this1.h[uri] = value;
-			} catch( _g ) {
+			this.fetchAst(uri,content,function(lexer,parser,ast) {
+				if(ast != null) {
+					_gthis.setDocument(uri,ast);
+				}
+			});
+		}
+	}
+	,pathFromUri: function(uri) {
+		var path = uri;
+		if(StringTools.startsWith(uri,"file://")) {
+			path = HxOverrides.substr(uri,7,null);
+			if(this.isWindows) {
+				if(HxOverrides.cca(path,1) == 58 && HxOverrides.cca(path,0) == 47) {
+					path = HxOverrides.substr(path,1,null);
+				}
+			}
+		} else {
+			return null;
+		}
+		path = decodeURIComponent(path.split("+").join(" "));
+		path = haxe_io_Path.normalize(path);
+		return path;
+	}
+	,uriFromPath: function(path) {
+		var normalizedPath = haxe_io_Path.normalize(path);
+		if(this.isWindows && normalizedPath.charAt(1) == ":") {
+			return "file:///" + this.encodePathComponents(normalizedPath);
+		}
+		return "file://" + this.encodePathComponents(normalizedPath);
+	}
+	,encodePathComponents: function(path) {
+		var components = path.split("/");
+		var _g = 0;
+		var _g1 = components.length;
+		while(_g < _g1) {
+			var i = _g++;
+			if(!(this.isWindows && i == 0 && components[i].length == 2 && components[i].charAt(1) == ":")) {
+				components[i] = encodeURIComponent(components[i]);
 			}
 		}
+		return components.join("/");
+	}
+	,updateDocumentIfNeeded: function(uri) {
+		var _gthis = this;
+		if(Object.prototype.hasOwnProperty.call(this.dirtyDocuments.h,uri)) {
+			this.handleFile(this.pathFromUri(uri),function(content) {
+				if(content != null) {
+					_gthis.updateDocument(uri,content,true);
+				}
+			});
+		}
+	}
+	,fetchAst: function(uri,content,callback,handleError) {
+		var lexer = new loreline_Lexer(content);
+		var tokens = lexer.tokenize();
+		var lexerErrors = lexer.getErrors();
+		if(lexerErrors != null && lexerErrors.length > 0) {
+			if(handleError != null) {
+				handleError(lexerErrors[0]);
+			}
+		}
+		if(uri == null || !StringTools.startsWith(uri,"file://")) {
+			callback(null,null,null);
+			return null;
+		}
+		var filePath = this.pathFromUri(uri);
+		var result = null;
+		if(filePath != null && this.handleFile != null) {
+			var imports = new loreline_Imports(filePath,tokens,$bind(this,this.handleFile),handleError);
+			imports.resolve(function(hasErrors,resolvedImports) {
+				var parser = new loreline_Parser(tokens,new loreline_ParserContext(filePath,filePath,resolvedImports,null));
+				result = parser.parse();
+				var parseErrors = parser.getErrors();
+				if(parseErrors != null && parseErrors.length > 0) {
+					if(handleError != null) {
+						handleError(parseErrors[0]);
+					}
+				}
+				if(callback != null) {
+					callback(lexer,parser,result);
+				}
+			});
+			return result;
+		}
+		var parser = new loreline_Parser(tokens);
+		result = parser.parse();
+		var parseErrors = parser.getErrors();
+		if(parseErrors != null && parseErrors.length > 0) {
+			if(handleError != null) {
+				handleError(parseErrors[0]);
+			}
+		}
+		if(callback != null) {
+			callback(lexer,parser,result);
+		}
+		return result;
+	}
+	,rangesEqual: function(a,b) {
+		if(a.start.line != b.start.line) {
+			return false;
+		}
+		if(a.start.character != b.start.character) {
+			return false;
+		}
+		if(a.end.line != b.end.line) {
+			return false;
+		}
+		if(a.end.character != b.end.character) {
+			return false;
+		}
+		return true;
 	}
 	,addDiagnostic: function(uri,pos,message,severity) {
 		var diagnostics = this.documentDiagnostics.h[uri];
@@ -294,6 +535,7 @@ loreline_lsp_Server.prototype = {
 	}
 	,handleCompletion: function(params) {
 		var uri = params.textDocument.uri;
+		this.updateDocumentIfNeeded(loreline_lsp_URI.toString(uri));
 		var this1 = this.documents;
 		var key = loreline_lsp_URI.toString(uri);
 		var ast = this1.h[key];
@@ -367,7 +609,7 @@ loreline_lsp_Server.prototype = {
 				case "\"":
 					return [];
 				case "$":
-					return this.getVariableCompletions(lens,node);
+					return this.getVariableCompletions(lens,node,lorelinePos);
 				case ".":
 					var prevText = HxOverrides.substr(content,0,lorelinePos.offset);
 					var dotIdx = prevText.lastIndexOf(".");
@@ -377,19 +619,50 @@ loreline_lsp_Server.prototype = {
 					prevText = HxOverrides.substr(prevText,0,dotIdx);
 					var resolved = null;
 					if(this.RE_IDENTIFIER_BEFORE.match(prevText)) {
-						var beforeNode = lens.getNodeAtPosition(lorelinePos.withOffset(content,-this.RE_IDENTIFIER_BEFORE.matched(0).length - 1));
-						if(beforeNode == null || !((beforeNode) instanceof loreline_NAccess)) {
+						var beforePos = lorelinePos.withOffset(content,-this.RE_IDENTIFIER_BEFORE.matched(0).length - 1);
+						var beforeNode = lens.getNodeAtPosition(beforePos);
+						if(beforeNode == null) {
+							return [];
+						} else if(((beforeNode) instanceof loreline_NAccess)) {
+							var access = beforeNode;
+							resolved = lens.resolveAccess(access);
+						} else if(((beforeNode) instanceof loreline_NFunctionDecl)) {
+							var func = beforeNode;
+							var hscriptCompletion = lens.getHscriptCompletion(func,lorelinePos);
+							if((hscriptCompletion != null ? hscriptCompletion.completion : null) != null) {
+								var _g = hscriptCompletion.completion.expr.e;
+								if(_g._hx_index == 5) {
+									var e = _g.e;
+									var f = _g.f;
+									var _g = hscriptCompletion.completion.t;
+									if(_g._hx_index == 14) {
+										var fields = _g.fields;
+										var items = [];
+										var _g = 0;
+										while(_g < fields.length) {
+											var field = fields[_g];
+											++_g;
+											items.push({ label : field.name, kind : 5, detail : "Object field", insertText : field.name, insertTextMode : 1, insertTextFormat : 1, documentation : ""});
+										}
+										return items;
+									}
+								}
+							}
+							resolved = lens.resolveAccessInFunction(func,beforePos);
+						} else {
 							return [];
 						}
-						var access = beforeNode;
-						resolved = lens.resolveAccess(access);
 					} else if(this.RE_ARRAY_ACCESS_BEFORE.match(prevText)) {
-						var beforeNode = lens.getNodeAtPosition(lorelinePos.withOffset(content,-this.RE_ARRAY_ACCESS_BEFORE.matched(0).length - 1));
-						if(beforeNode == null || !((beforeNode) instanceof loreline_NArrayAccess)) {
+						var beforePos = lorelinePos.withOffset(content,-this.RE_ARRAY_ACCESS_BEFORE.matched(0).length - 1);
+						var beforeNode = lens.getNodeAtPosition(beforePos);
+						if(beforeNode == null) {
+							return [];
+						} else if(((beforeNode) instanceof loreline_NArrayAccess)) {
+							var access = beforeNode;
+							resolved = lens.resolveArrayAccess(access);
+						} else {
 							return [];
 						}
-						var access = beforeNode;
-						resolved = lens.resolveArrayAccess(access);
 					}
 					if(resolved == null) {
 						return [];
@@ -437,6 +710,9 @@ loreline_lsp_Server.prototype = {
 					}
 					return [];
 				case "<":
+					if(((node) instanceof loreline_NFunctionDecl)) {
+						return [];
+					}
 					return this.getTagCompletions(lens);
 				default:
 					return [];
@@ -453,12 +729,24 @@ loreline_lsp_Server.prototype = {
 				return this.getBeatCompletions(lens,node,spaces.length > 0 ? "" : " ");
 			}
 			var items = [];
-			var _g = 0;
-			var _g1 = lens.getVisibleCharacters();
-			while(_g < _g1.length) {
-				var character = _g1[_g];
-				++_g;
-				items.push({ label : character.name, kind : 22, detail : "Character", insertText : character.name, insertTextMode : 1, insertTextFormat : 1, documentation : this.documentationForNode(character)});
+			if(((node) instanceof loreline_NFunctionDecl)) {
+				var func = node;
+				var hscriptCompletion = lens.getHscriptCompletion(func,lorelinePos);
+				if((hscriptCompletion != null ? hscriptCompletion.locals : null) != null) {
+					var h = hscriptCompletion.locals.h;
+					var _g_h = h;
+					var _g_keys = Object.keys(h);
+					var _g_length = _g_keys.length;
+					var _g_current = 0;
+					while(_g_current < _g_length) {
+						var key = _g_keys[_g_current++];
+						var _g_key = key;
+						var _g_value = _g_h[key];
+						var name = _g_key;
+						var local = _g_value;
+						items.push({ label : name, kind : 5, detail : "Local variable", insertText : name, insertTextMode : 1, insertTextFormat : 1, documentation : ""});
+					}
+				}
 			}
 			var _g = 0;
 			var _g1 = lens.getVisibleStateFields(node);
@@ -468,18 +756,55 @@ loreline_lsp_Server.prototype = {
 				items.push({ label : field.name, kind : 6, detail : "State field", insertText : field.name, insertTextMode : 1, insertTextFormat : 1, documentation : this.documentationForNode(field)});
 			}
 			var _g = 0;
-			var _g1 = lens.getVisibleBeats(node);
+			var _g1 = lens.getVisibleCharacters();
 			while(_g < _g1.length) {
-				var beat = _g1[_g];
+				var character = _g1[_g];
 				++_g;
-				items.push({ label : beat.name, kind : 7, detail : "Beat", insertText : beat.name, insertTextMode : 1, insertTextFormat : 1, documentation : this.documentationForNode(beat)});
+				items.push({ label : character.name, kind : 22, detail : "Character", insertText : character.name, insertTextMode : 1, insertTextFormat : 1, documentation : this.documentationForNode(character)});
+			}
+			var _g = 0;
+			var _g1 = lens.getVisibleFunctions();
+			while(_g < _g1.length) {
+				var func = _g1[_g];
+				++_g;
+				if(func.name != null) {
+					items.push({ label : func.name, kind : 3, detail : "Function", insertText : func.name, insertTextMode : 1, insertTextFormat : 1, documentation : this.documentationForNode(func)});
+				}
+			}
+			if(!((node) instanceof loreline_NFunctionDecl)) {
+				var _g = 0;
+				var _g1 = lens.getVisibleBeats(node);
+				while(_g < _g1.length) {
+					var beat = _g1[_g];
+					++_g;
+					items.push({ label : beat.name, kind : 7, detail : "Beat", insertText : beat.name, insertTextMode : 1, insertTextFormat : 1, documentation : this.documentationForNode(beat)});
+				}
 			}
 			return items;
 		}
 		return [];
 	}
-	,getVariableCompletions: function(lens,node) {
+	,getVariableCompletions: function(lens,node,lorelinePos) {
 		var items = [];
+		if(((node) instanceof loreline_NFunctionDecl)) {
+			var func = node;
+			var hscriptCompletion = lens.getHscriptCompletion(func,lorelinePos);
+			if((hscriptCompletion != null ? hscriptCompletion.locals : null) != null) {
+				var h = hscriptCompletion.locals.h;
+				var _g_h = h;
+				var _g_keys = Object.keys(h);
+				var _g_length = _g_keys.length;
+				var _g_current = 0;
+				while(_g_current < _g_length) {
+					var key = _g_keys[_g_current++];
+					var _g_key = key;
+					var _g_value = _g_h[key];
+					var name = _g_key;
+					var local = _g_value;
+					items.push({ label : name, kind : 5, detail : "Local variable", insertText : name, insertTextMode : 1, insertTextFormat : 1, documentation : ""});
+				}
+			}
+		}
 		var _g = 0;
 		var _g1 = lens.getVisibleStateFields(node);
 		while(_g < _g1.length) {
@@ -493,6 +818,15 @@ loreline_lsp_Server.prototype = {
 			var character = _g1[_g];
 			++_g;
 			items.push({ label : character.name, kind : 7, detail : "Character", documentation : this.documentationForNode(character)});
+		}
+		var _g = 0;
+		var _g1 = lens.getVisibleFunctions();
+		while(_g < _g1.length) {
+			var func = _g1[_g];
+			++_g;
+			if(func.name != null) {
+				items.push({ label : func.name, kind : 3, detail : "Function", insertText : func.name, insertTextMode : 1, insertTextFormat : 1, documentation : this.documentationForNode(func)});
+			}
 		}
 		return items;
 	}
@@ -524,6 +858,7 @@ loreline_lsp_Server.prototype = {
 	,handleDefinition: function(params) {
 		var result = [];
 		var uri = params.textDocument.uri;
+		this.updateDocumentIfNeeded(loreline_lsp_URI.toString(uri));
 		var this1 = this.documents;
 		var key = loreline_lsp_URI.toString(uri);
 		var ast = this1.h[key];
@@ -564,7 +899,7 @@ loreline_lsp_Server.prototype = {
 					} else {
 						peekNode = resolved;
 					}
-					result.push({ targetUri : uri, targetRange : this.rangeFromLorelinePosition(peekNode.pos,content), targetSelectionRange : this.firstLineRange(this.rangeFromLorelinePosition(resolved.pos,content),content), originSelectionRange : this.rangeFromLorelinePosition(access.pos,content)});
+					result.push({ targetUri : loreline_lsp_URI.fromString(this.resolveNodeUri(loreline_lsp_URI.toString(uri),resolved,lens)), targetRange : this.rangeFromLorelinePosition(peekNode.pos,content), targetSelectionRange : this.firstLineRange(this.rangeFromLorelinePosition(resolved.pos,content),content), originSelectionRange : this.rangeFromLorelinePosition(access.pos,content)});
 				}
 				break;
 			case loreline_NArrayAccess:
@@ -579,26 +914,48 @@ loreline_lsp_Server.prototype = {
 					} else {
 						peekNode = resolved;
 					}
-					result.push({ targetUri : uri, targetRange : this.rangeFromLorelinePosition(peekNode.pos,content), targetSelectionRange : this.firstLineRange(this.rangeFromLorelinePosition(resolved.pos,content),content), originSelectionRange : this.rangeFromLorelinePosition(access.pos,content)});
+					result.push({ targetUri : loreline_lsp_URI.fromString(this.resolveNodeUri(loreline_lsp_URI.toString(uri),resolved,lens)), targetRange : this.rangeFromLorelinePosition(peekNode.pos,content), targetSelectionRange : this.firstLineRange(this.rangeFromLorelinePosition(resolved.pos,content),content), originSelectionRange : this.rangeFromLorelinePosition(access.pos,content)});
 				}
 				break;
 			case loreline_NDialogueStatement:
 				var dialogue = node;
 				var characterDecl = lens.findCharacterFromDialogue(dialogue);
 				if(characterDecl != null) {
-					result.push({ targetUri : uri, targetRange : this.rangeFromLorelinePosition(characterDecl.pos,content), targetSelectionRange : this.firstLineRange(this.rangeFromLorelinePosition(characterDecl.pos,content),content), originSelectionRange : this.rangeFromLorelinePosition(dialogue.characterPos,content)});
+					result.push({ targetUri : loreline_lsp_URI.fromString(this.resolveNodeUri(loreline_lsp_URI.toString(uri),characterDecl,lens)), targetRange : this.rangeFromLorelinePosition(characterDecl.pos,content), targetSelectionRange : this.firstLineRange(this.rangeFromLorelinePosition(characterDecl.pos,content),content), originSelectionRange : this.rangeFromLorelinePosition(dialogue.characterPos,content)});
 				}
+				break;
+			case loreline_NImportStatement:
+				var importNode = node;
+				result.push({ targetUri : loreline_lsp_URI.fromString(this.resolveNodeUri(loreline_lsp_URI.toString(uri),importNode,lens)), targetRange : this.rangeFromLorelinePosition(new loreline_Position(1,1,0,0),""), targetSelectionRange : this.rangeFromLorelinePosition(new loreline_Position(1,1,0,0),"")});
 				break;
 			case loreline_NTransition:
 				var transition = node;
 				var beatDecl = lens.findBeatFromTransition(transition);
 				if(beatDecl != null) {
-					result.push({ targetUri : uri, targetRange : this.rangeFromLorelinePosition(beatDecl.pos,content), targetSelectionRange : this.firstLineRange(this.rangeFromLorelinePosition(beatDecl.pos,content),content), originSelectionRange : this.rangeFromLorelinePosition(transition.targetPos,content)});
+					result.push({ targetUri : loreline_lsp_URI.fromString(this.resolveNodeUri(loreline_lsp_URI.toString(uri),beatDecl,lens)), targetRange : this.rangeFromLorelinePosition(beatDecl.pos,content), targetSelectionRange : this.firstLineRange(this.rangeFromLorelinePosition(beatDecl.pos,content),content), originSelectionRange : this.rangeFromLorelinePosition(transition.targetPos,content)});
 				}
 				break;
 			}
 		}
 		return result;
+	}
+	,resolveNodeUri: function(uri,node,lens) {
+		var importNode = ((node) instanceof loreline_NImportStatement) ? node : lens.getFirstParentOfType(node,loreline_NImportStatement);
+		if(importNode != null) {
+			var rootPath = this.pathFromUri(uri);
+			if(rootPath != null) {
+				var importPath = importNode.path;
+				if(!haxe_io_Path.isAbsolute(importPath)) {
+					importPath = haxe_io_Path.join([haxe_io_Path.directory(rootPath),importPath]);
+				}
+				importPath = haxe_io_Path.normalize(importPath);
+				if(!StringTools.endsWith(importPath.toLowerCase(),".lor")) {
+					importPath += ".lor";
+				}
+				uri = this.uriFromPath(importPath);
+			}
+		}
+		return uri;
 	}
 	,makeHover: function(title,description,content,node,pos) {
 		var value = [];
@@ -618,6 +975,7 @@ loreline_lsp_Server.prototype = {
 	}
 	,handleHover: function(params) {
 		var uri = params.textDocument.uri;
+		this.updateDocumentIfNeeded(loreline_lsp_URI.toString(uri));
 		var this1 = this.documents;
 		var key = loreline_lsp_URI.toString(uri);
 		var ast = this1.h[key];
@@ -631,12 +989,11 @@ loreline_lsp_Server.prototype = {
 		var lens = new loreline_Lens(ast);
 		var node = lens.getNodeAtPosition(lorelinePos);
 		if(node != null) {
-			return this.makeNodeHover(lens,loreline_lsp_URI.toString(uri),content,node);
+			return this.makeNodeHover(lorelinePos,lens,loreline_lsp_URI.toString(uri),content,node);
 		}
 		return null;
 	}
-	,makeNodeHover: function(lens,uri,content,node) {
-		this.onLog(JSON.stringify(node.pos.toJson()),{ fileName : "loreline/lsp/Server.hx", lineNumber : 923, className : "loreline.lsp.Server", methodName : "makeNodeHover"});
+	,makeNodeHover: function(lorelinePos,lens,uri,content,node) {
 		switch(js_Boot.getClass(node)) {
 		case loreline_NAccess:
 			var access = node;
@@ -661,9 +1018,13 @@ loreline_lsp_Server.prototype = {
 		case loreline_NChoiceStatement:
 			return this.makeChoiceHover(node,content);
 		case loreline_NDialogueStatement:
-			return this.makeDialogueStatementHover(node,content);
+			return this.makeDialogueStatementHover(node,content,lens);
+		case loreline_NFunctionDecl:
+			return this.makeFunctionHover(node,content,lens,lorelinePos);
 		case loreline_NIfStatement:
 			return this.makeHover("**Condition**",null,content,node);
+		case loreline_NImportStatement:
+			return this.makeImportHover(node,content);
 		case loreline_NLiteral:
 			var literal = node;
 			var _g = literal.literalType;
@@ -696,7 +1057,7 @@ loreline_lsp_Server.prototype = {
 				break;
 			case 1:
 				var expr = _g.expr;
-				return this.makeNodeHover(lens,uri,content,expr);
+				return this.makeNodeHover(lorelinePos,lens,uri,content,expr);
 			case 2:
 				var closing = _g.closing;
 				var expr = _g.expr;
@@ -714,7 +1075,7 @@ loreline_lsp_Server.prototype = {
 						break;
 					case 1:
 						var expr = _g.expr;
-						return this.makeNodeHover(lens,uri,content,expr);
+						return this.makeNodeHover(lorelinePos,lens,uri,content,expr);
 					case 2:
 						var closing = _g.closing;
 						var expr = _g.expr;
@@ -1111,8 +1472,212 @@ loreline_lsp_Server.prototype = {
 	,makeCharacterDeclHover: function(characterDecl,content,pos) {
 		return this.makeHover(this.hoverTitle("Character",this.characterName(characterDecl)),this.hoverDescriptionForNode(characterDecl),content,characterDecl,pos);
 	}
+	,makeFunctionHover: function(func,content,lens,lorelinePos) {
+		var expr = null;
+		try {
+			expr = lens.getHscriptExpr(func,lorelinePos);
+		} catch( _g ) {
+		}
+		if(expr != null) {
+			var codeToHscript = lens.getFuncHscript(func).codeToHscript;
+			var exprPos = codeToHscript.toLorelinePos(func.pos,expr.pmin,expr.pmax);
+			var title;
+			var _g = expr.e;
+			switch(_g._hx_index) {
+			case 0:
+				var _g1 = _g.c;
+				switch(_g1._hx_index) {
+				case 0:
+					var v = _g1.v;
+					title = "Number";
+					break;
+				case 1:
+					var f = _g1.f;
+					title = "Number";
+					break;
+				case 2:
+					var s = _g1.s;
+					title = "String";
+					break;
+				}
+				break;
+			case 1:
+				var _g1 = _g.v;
+				switch(_g1) {
+				case "false":
+					title = "Boolean";
+					break;
+				case "null":
+					title = "Null";
+					break;
+				case "true":
+					title = "Boolean";
+					break;
+				default:
+					var v = _g1;
+					title = "Identifier";
+				}
+				break;
+			case 2:
+				var n = _g.n;
+				var t = _g.t;
+				var e = _g.e;
+				title = "Variable";
+				break;
+			case 3:
+				var e = _g.e;
+				title = "Parenthesis";
+				break;
+			case 4:
+				var e = _g.e;
+				title = "Block";
+				break;
+			case 5:
+				var e = _g.e;
+				var f = _g.f;
+				title = "Field";
+				break;
+			case 6:
+				var op = _g.op;
+				var e1 = _g.e1;
+				var e2 = _g.e2;
+				title = "Binary operation";
+				break;
+			case 7:
+				var op = _g.op;
+				var prefix = _g.prefix;
+				var e = _g.e;
+				title = "Unary operation";
+				break;
+			case 8:
+				var e = _g.e;
+				var params = _g.params;
+				title = "Function";
+				break;
+			case 9:
+				var cond = _g.cond;
+				var e1 = _g.e1;
+				var e2 = _g.e2;
+				title = "Condition";
+				break;
+			case 10:
+				var cond = _g.cond;
+				var e = _g.e;
+				title = "Loop";
+				break;
+			case 11:
+				var v = _g.v;
+				var it = _g.it;
+				var e = _g.e;
+				title = "Iteration";
+				break;
+			case 12:
+				title = "Break";
+				break;
+			case 13:
+				title = "Continue";
+				break;
+			case 14:
+				var args = _g.args;
+				var e = _g.e;
+				var name = _g.name;
+				var ret = _g.ret;
+				title = "Function";
+				break;
+			case 15:
+				var e = _g.e;
+				title = "Return";
+				break;
+			case 16:
+				var e = _g.e;
+				var index = _g.index;
+				title = "Array access";
+				break;
+			case 17:
+				var e = _g.e;
+				title = "Array";
+				break;
+			case 18:
+				var cl = _g.cl;
+				var params = _g.params;
+				title = "New";
+				break;
+			case 19:
+				var e = _g.e;
+				title = "Throw";
+				break;
+			case 20:
+				var e = _g.e;
+				var v = _g.v;
+				var t = _g.t;
+				var ecatch = _g.ecatch;
+				title = "Try";
+				break;
+			case 21:
+				var fl = _g.fl;
+				title = "Object";
+				break;
+			case 22:
+				var cond = _g.cond;
+				var e1 = _g.e1;
+				var e2 = _g.e2;
+				title = "Ternary operation";
+				break;
+			case 23:
+				var e = _g.e;
+				var cases = _g.cases;
+				var defaultExpr = _g.defaultExpr;
+				title = "Switch";
+				break;
+			case 24:
+				var cond = _g.cond;
+				var e = _g.e;
+				title = "Do... while";
+				break;
+			case 25:
+				var name = _g.name;
+				var args = _g.args;
+				var e = _g.e;
+				title = "Metadata";
+				break;
+			case 26:
+				var e = _g.e;
+				var t = _g.t;
+				title = "Type";
+				break;
+			}
+			var tmp = title;
+			return this.makeHover(this.hoverTitle(tmp != null ? tmp : "Expression"),this.hoverDescriptionForNode(func),content,func,exprPos);
+		}
+		return this.makeFunctionDeclHover(func,content);
+	}
+	,makeFunctionDeclHover: function(func,content,lorelinePos) {
+		var name = null;
+		if(func.name != null) {
+			name = func.name + "(";
+			if(func.args != null) {
+				var first = true;
+				var _g = 0;
+				var _g1 = func.args;
+				while(_g < _g1.length) {
+					var arg = _g1[_g];
+					++_g;
+					if(!first) {
+						name += ", ";
+					}
+					first = false;
+					name += arg;
+				}
+			}
+			name += ")";
+		}
+		return this.makeHover(this.hoverTitle("Function",name),this.hoverDescriptionForNode(func),content,func,lorelinePos);
+	}
 	,makeChoiceHover: function(choice,content) {
 		return this.makeHover(this.hoverTitle("Choice"),this.hoverDescriptionForNode(choice),content,choice);
+	}
+	,makeImportHover: function(importNode,content) {
+		return this.makeHover(this.hoverTitle("Import"),this.hoverDescriptionForNode(importNode),content,importNode);
 	}
 	,makeExprHover: function(expr,content) {
 		return this.makeHover(this.printLoreline(expr),this.hoverDescriptionForNode(expr),content,expr);
@@ -1125,6 +1690,8 @@ loreline_lsp_Server.prototype = {
 		if(resolved != null) {
 			if(((resolved) instanceof loreline_NCharacterDecl)) {
 				return this.makeCharacterDeclHover(resolved,content,access.pos);
+			} else if(((resolved) instanceof loreline_NFunctionDecl)) {
+				return this.makeFunctionDeclHover(resolved,content,access.pos);
 			}
 			var parentCharacter = lens.getFirstParentOfType(resolved,loreline_NCharacterDecl);
 			var parentState = lens.getFirstParentOfType(resolved,loreline_NStateDecl);
@@ -1139,7 +1706,7 @@ loreline_lsp_Server.prototype = {
 		} else {
 			var parent = lens.getParentNode(access);
 			if(((parent) instanceof loreline_NCall)) {
-				return this.makeHover(this.hoverTitle("Function call",access.name + "()"),this.hoverDescriptionForNode(access),content,access);
+				return this.makeHover(this.hoverTitle("Function",access.name + "()"),this.hoverDescriptionForNode(access),content,access);
 			} else if(((parent) instanceof loreline_NArrayAccess)) {
 				return this.makeHover(this.hoverTitle("Array access",access.name + "[]"),this.hoverDescriptionForNode(access),content,access);
 			} else {
@@ -1150,7 +1717,11 @@ loreline_lsp_Server.prototype = {
 	,makeArrayAccessHover: function(access,content,lens) {
 		return this.makeHover(this.hoverTitle("Array access",this.printLoreline(access.target) + "[]"),this.hoverDescriptionForNode(access),content,access);
 	}
-	,makeDialogueStatementHover: function(expr,content) {
+	,makeDialogueStatementHover: function(expr,content,lens) {
+		var characterDecl = lens.findCharacterFromDialogue(expr);
+		if(characterDecl != null) {
+			return this.makeHover(this.hoverTitle("Dialogue",null,this.characterName(characterDecl)),this.hoverDescriptionForNode(expr),content,expr);
+		}
 		return this.makeHover(this.hoverTitle("Dialogue"),this.hoverDescriptionForNode(expr),content,expr);
 	}
 	,printLoreline: function(node) {
@@ -1167,6 +1738,7 @@ loreline_lsp_Server.prototype = {
 		}
 	}
 	,handleDocumentSymbol: function(params) {
+		this.updateDocumentIfNeeded(loreline_lsp_URI.toString(params.textDocument.uri));
 		var this1 = this.documents;
 		var key = loreline_lsp_URI.toString(params.textDocument.uri);
 		var ast = this1.h[key];
@@ -1246,7 +1818,7 @@ loreline_lsp_Server.prototype = {
 var LorelineServer = function() { };
 LorelineServer.__name__ = "LorelineServer";
 LorelineServer.main = function() {
-	haxe_Log.trace("INITIALIZE LORELINE SERVER",{ fileName : "src/LorelineServer.hx", lineNumber : 47, className : "LorelineServer", methodName : "main"});
+	haxe_Log.trace("INITIALIZE LORELINE SERVER",{ fileName : "/Users/jeremyfa/Developer/vscode-loreline/src/LorelineServer.hx", lineNumber : 47, className : "LorelineServer", methodName : "main"});
 	try {
 		var $require = Module.createRequire(__filename);
 		var connection = $require("vscode-languageserver/node").createConnection();
@@ -1394,9 +1966,9 @@ LorelineServer.main = function() {
 		connection.listen();
 	} catch( _g ) {
 		var e = haxe_Exception.caught(_g).unwrap();
-		haxe_Log.trace("Fatal server error: " + Std.string(e),{ fileName : "src/LorelineServer.hx", lineNumber : 225, className : "LorelineServer", methodName : "main"});
+		haxe_Log.trace("Fatal server error: " + Std.string(e),{ fileName : "/Users/jeremyfa/Developer/vscode-loreline/src/LorelineServer.hx", lineNumber : 225, className : "LorelineServer", methodName : "main"});
 		if(e != null && e.stack != null) {
-			haxe_Log.trace(e.stack,{ fileName : "src/LorelineServer.hx", lineNumber : 227, className : "LorelineServer", methodName : "main"});
+			haxe_Log.trace(e.stack,{ fileName : "/Users/jeremyfa/Developer/vscode-loreline/src/LorelineServer.hx", lineNumber : 227, className : "LorelineServer", methodName : "main"});
 		}
 		process.exit(1);
 	}
@@ -1408,6 +1980,31 @@ LorelineServer.makeNotification = function(method,params) {
 	return { jsonrpc : "2.0", method : method, params : params};
 };
 Math.__name__ = "Math";
+var Reflect = function() { };
+Reflect.__name__ = "Reflect";
+Reflect.field = function(o,field) {
+	try {
+		return o[field];
+	} catch( _g ) {
+		return null;
+	}
+};
+Reflect.compare = function(a,b) {
+	if(a == b) {
+		return 0;
+	} else if(a > b) {
+		return 1;
+	} else {
+		return -1;
+	}
+};
+Reflect.isEnumValue = function(v) {
+	if(v != null) {
+		return v.__enum__ != null;
+	} else {
+		return false;
+	}
+};
 var Std = function() { };
 Std.__name__ = "Std";
 Std.string = function(s) {
@@ -1429,6 +2026,68 @@ StringBuf.prototype = {
 };
 var StringTools = function() { };
 StringTools.__name__ = "StringTools";
+StringTools.htmlEscape = function(s,quotes) {
+	var buf_b = "";
+	var _g_offset = 0;
+	var _g_s = s;
+	while(_g_offset < _g_s.length) {
+		var s = _g_s;
+		var index = _g_offset++;
+		var c = s.charCodeAt(index);
+		if(c >= 55296 && c <= 56319) {
+			c = c - 55232 << 10 | s.charCodeAt(index + 1) & 1023;
+		}
+		var c1 = c;
+		if(c1 >= 65536) {
+			++_g_offset;
+		}
+		var code = c1;
+		switch(code) {
+		case 34:
+			if(quotes) {
+				buf_b += "&quot;";
+			} else {
+				buf_b += String.fromCodePoint(code);
+			}
+			break;
+		case 38:
+			buf_b += "&amp;";
+			break;
+		case 39:
+			if(quotes) {
+				buf_b += "&#039;";
+			} else {
+				buf_b += String.fromCodePoint(code);
+			}
+			break;
+		case 60:
+			buf_b += "&lt;";
+			break;
+		case 62:
+			buf_b += "&gt;";
+			break;
+		default:
+			buf_b += String.fromCodePoint(code);
+		}
+	}
+	return buf_b;
+};
+StringTools.startsWith = function(s,start) {
+	if(s.length >= start.length) {
+		return s.lastIndexOf(start,0) == 0;
+	} else {
+		return false;
+	}
+};
+StringTools.endsWith = function(s,end) {
+	var elen = end.length;
+	var slen = s.length;
+	if(slen >= elen) {
+		return s.indexOf(end,slen - elen) == slen - elen;
+	} else {
+		return false;
+	}
+};
 StringTools.isSpace = function(s,pos) {
 	var c = HxOverrides.cca(s,pos);
 	if(!(c > 8 && c < 14)) {
@@ -1559,6 +2218,129 @@ Type.enumEq = function(a,b) {
 	}
 	return true;
 };
+Type.enumParameters = function(e) {
+	var enm = $hxEnums[e.__enum__];
+	var params = enm.__constructs__[e._hx_index].__params__;
+	if(params != null) {
+		var _g = [];
+		var _g1 = 0;
+		while(_g1 < params.length) {
+			var p = params[_g1];
+			++_g1;
+			_g.push(e[p]);
+		}
+		return _g;
+	} else {
+		return [];
+	}
+};
+var XmlType = {};
+XmlType.toString = function(this1) {
+	switch(this1) {
+	case 0:
+		return "Element";
+	case 1:
+		return "PCData";
+	case 2:
+		return "CData";
+	case 3:
+		return "Comment";
+	case 4:
+		return "DocType";
+	case 5:
+		return "ProcessingInstruction";
+	case 6:
+		return "Document";
+	}
+};
+var Xml = function(nodeType) {
+	this.nodeType = nodeType;
+	this.children = [];
+	this.attributeMap = new haxe_ds_StringMap();
+};
+Xml.__name__ = "Xml";
+Xml.prototype = {
+	get: function(att) {
+		if(this.nodeType != Xml.Element) {
+			throw haxe_Exception.thrown("Bad node type, expected Element but found " + (this.nodeType == null ? "null" : XmlType.toString(this.nodeType)));
+		}
+		return this.attributeMap.h[att];
+	}
+	,exists: function(att) {
+		if(this.nodeType != Xml.Element) {
+			throw haxe_Exception.thrown("Bad node type, expected Element but found " + (this.nodeType == null ? "null" : XmlType.toString(this.nodeType)));
+		}
+		return Object.prototype.hasOwnProperty.call(this.attributeMap.h,att);
+	}
+	,attributes: function() {
+		if(this.nodeType != Xml.Element) {
+			throw haxe_Exception.thrown("Bad node type, expected Element but found " + (this.nodeType == null ? "null" : XmlType.toString(this.nodeType)));
+		}
+		return new haxe_ds__$StringMap_StringMapKeyIterator(this.attributeMap.h);
+	}
+	,elements: function() {
+		if(this.nodeType != Xml.Document && this.nodeType != Xml.Element) {
+			throw haxe_Exception.thrown("Bad node type, expected Element or Document but found " + (this.nodeType == null ? "null" : XmlType.toString(this.nodeType)));
+		}
+		var _g = [];
+		var _g1 = 0;
+		var _g2 = this.children;
+		while(_g1 < _g2.length) {
+			var child = _g2[_g1];
+			++_g1;
+			if(child.nodeType == Xml.Element) {
+				_g.push(child);
+			}
+		}
+		var ret = _g;
+		return new haxe_iterators_ArrayIterator(ret);
+	}
+	,elementsNamed: function(name) {
+		if(this.nodeType != Xml.Document && this.nodeType != Xml.Element) {
+			throw haxe_Exception.thrown("Bad node type, expected Element or Document but found " + (this.nodeType == null ? "null" : XmlType.toString(this.nodeType)));
+		}
+		var _g = [];
+		var _g1 = 0;
+		var _g2 = this.children;
+		while(_g1 < _g2.length) {
+			var child = _g2[_g1];
+			++_g1;
+			var tmp;
+			if(child.nodeType == Xml.Element) {
+				if(child.nodeType != Xml.Element) {
+					throw haxe_Exception.thrown("Bad node type, expected Element but found " + (child.nodeType == null ? "null" : XmlType.toString(child.nodeType)));
+				}
+				tmp = child.nodeName == name;
+			} else {
+				tmp = false;
+			}
+			if(tmp) {
+				_g.push(child);
+			}
+		}
+		var ret = _g;
+		return new haxe_iterators_ArrayIterator(ret);
+	}
+	,firstElement: function() {
+		if(this.nodeType != Xml.Document && this.nodeType != Xml.Element) {
+			throw haxe_Exception.thrown("Bad node type, expected Element or Document but found " + (this.nodeType == null ? "null" : XmlType.toString(this.nodeType)));
+		}
+		var _g = 0;
+		var _g1 = this.children;
+		while(_g < _g1.length) {
+			var child = _g1[_g];
+			++_g;
+			if(child.nodeType == Xml.Element) {
+				return child;
+			}
+		}
+		return null;
+	}
+	,toString: function() {
+		return haxe_xml_Printer.print(this);
+	}
+	,__class__: Xml
+};
 var haxe_StackItem = $hxEnums["haxe.StackItem"] = { __ename__:true,__constructs__:null
 	,CFunction: {_hx_name:"CFunction",_hx_index:0,__enum__:"haxe.StackItem",toString:$estr}
 	,Module: ($_=function(m) { return {_hx_index:1,m:m,__enum__:"haxe.StackItem",toString:$estr}; },$_._hx_name="Module",$_.__params__ = ["m"],$_)
@@ -1609,6 +2391,7 @@ haxe_Exception.prototype = $extend(Error.prototype,{
 		return this.__nativeException;
 	}
 	,__class__: haxe_Exception
+	,__properties__: {get_native:"get_native"}
 });
 var haxe__$Int64__$_$_$Int64 = function(high,low) {
 	this.high = high;
@@ -1784,6 +2567,191 @@ haxe_ValueException.prototype = $extend(haxe_Exception.prototype,{
 	}
 	,__class__: haxe_ValueException
 });
+var haxe_ds_BalancedTree = function() {
+};
+haxe_ds_BalancedTree.__name__ = "haxe.ds.BalancedTree";
+haxe_ds_BalancedTree.__interfaces__ = [haxe_IMap];
+haxe_ds_BalancedTree.prototype = {
+	set: function(key,value) {
+		this.root = this.setLoop(key,value,this.root);
+	}
+	,get: function(key) {
+		var node = this.root;
+		while(node != null) {
+			var c = this.compare(key,node.key);
+			if(c == 0) {
+				return node.value;
+			}
+			if(c < 0) {
+				node = node.left;
+			} else {
+				node = node.right;
+			}
+		}
+		return null;
+	}
+	,setLoop: function(k,v,node) {
+		if(node == null) {
+			return new haxe_ds_TreeNode(null,k,v,null);
+		}
+		var c = this.compare(k,node.key);
+		if(c == 0) {
+			return new haxe_ds_TreeNode(node.left,k,v,node.right,node == null ? 0 : node._height);
+		} else if(c < 0) {
+			var nl = this.setLoop(k,v,node.left);
+			return this.balance(nl,node.key,node.value,node.right);
+		} else {
+			var nr = this.setLoop(k,v,node.right);
+			return this.balance(node.left,node.key,node.value,nr);
+		}
+	}
+	,balance: function(l,k,v,r) {
+		var hl = l == null ? 0 : l._height;
+		var hr = r == null ? 0 : r._height;
+		if(hl > hr + 2) {
+			var _this = l.left;
+			var _this1 = l.right;
+			if((_this == null ? 0 : _this._height) >= (_this1 == null ? 0 : _this1._height)) {
+				return new haxe_ds_TreeNode(l.left,l.key,l.value,new haxe_ds_TreeNode(l.right,k,v,r));
+			} else {
+				return new haxe_ds_TreeNode(new haxe_ds_TreeNode(l.left,l.key,l.value,l.right.left),l.right.key,l.right.value,new haxe_ds_TreeNode(l.right.right,k,v,r));
+			}
+		} else if(hr > hl + 2) {
+			var _this = r.right;
+			var _this1 = r.left;
+			if((_this == null ? 0 : _this._height) > (_this1 == null ? 0 : _this1._height)) {
+				return new haxe_ds_TreeNode(new haxe_ds_TreeNode(l,k,v,r.left),r.key,r.value,r.right);
+			} else {
+				return new haxe_ds_TreeNode(new haxe_ds_TreeNode(l,k,v,r.left.left),r.left.key,r.left.value,new haxe_ds_TreeNode(r.left.right,r.key,r.value,r.right));
+			}
+		} else {
+			return new haxe_ds_TreeNode(l,k,v,r,(hl > hr ? hl : hr) + 1);
+		}
+	}
+	,compare: function(k1,k2) {
+		return Reflect.compare(k1,k2);
+	}
+	,__class__: haxe_ds_BalancedTree
+};
+var haxe_ds_TreeNode = function(l,k,v,r,h) {
+	if(h == null) {
+		h = -1;
+	}
+	this.left = l;
+	this.key = k;
+	this.value = v;
+	this.right = r;
+	if(h == -1) {
+		var tmp;
+		var _this = this.left;
+		var _this1 = this.right;
+		if((_this == null ? 0 : _this._height) > (_this1 == null ? 0 : _this1._height)) {
+			var _this = this.left;
+			tmp = _this == null ? 0 : _this._height;
+		} else {
+			var _this = this.right;
+			tmp = _this == null ? 0 : _this._height;
+		}
+		this._height = tmp + 1;
+	} else {
+		this._height = h;
+	}
+};
+haxe_ds_TreeNode.__name__ = "haxe.ds.TreeNode";
+haxe_ds_TreeNode.prototype = {
+	__class__: haxe_ds_TreeNode
+};
+var haxe_ds_EnumValueMap = function() {
+	haxe_ds_BalancedTree.call(this);
+};
+haxe_ds_EnumValueMap.__name__ = "haxe.ds.EnumValueMap";
+haxe_ds_EnumValueMap.__interfaces__ = [haxe_IMap];
+haxe_ds_EnumValueMap.__super__ = haxe_ds_BalancedTree;
+haxe_ds_EnumValueMap.prototype = $extend(haxe_ds_BalancedTree.prototype,{
+	compare: function(k1,k2) {
+		var d = k1._hx_index - k2._hx_index;
+		if(d != 0) {
+			return d;
+		}
+		var p1 = Type.enumParameters(k1);
+		var p2 = Type.enumParameters(k2);
+		if(p1.length == 0 && p2.length == 0) {
+			return 0;
+		}
+		return this.compareArgs(p1,p2);
+	}
+	,compareArgs: function(a1,a2) {
+		var ld = a1.length - a2.length;
+		if(ld != 0) {
+			return ld;
+		}
+		var _g = 0;
+		var _g1 = a1.length;
+		while(_g < _g1) {
+			var i = _g++;
+			var d = this.compareArg(a1[i],a2[i]);
+			if(d != 0) {
+				return d;
+			}
+		}
+		return 0;
+	}
+	,compareArg: function(v1,v2) {
+		if(Reflect.isEnumValue(v1) && Reflect.isEnumValue(v2)) {
+			return this.compare(v1,v2);
+		} else if(((v1) instanceof Array) && ((v2) instanceof Array)) {
+			return this.compareArgs(v1,v2);
+		} else {
+			return Reflect.compare(v1,v2);
+		}
+	}
+	,__class__: haxe_ds_EnumValueMap
+});
+var haxe_ds_List = function() {
+	this.length = 0;
+};
+haxe_ds_List.__name__ = "haxe.ds.List";
+haxe_ds_List.prototype = {
+	add: function(item) {
+		var x = new haxe_ds__$List_ListNode(item,null);
+		if(this.h == null) {
+			this.h = x;
+		} else {
+			this.q.next = x;
+		}
+		this.q = x;
+		this.length++;
+	}
+	,push: function(item) {
+		var x = new haxe_ds__$List_ListNode(item,this.h);
+		this.h = x;
+		if(this.q == null) {
+			this.q = x;
+		}
+		this.length++;
+	}
+	,pop: function() {
+		if(this.h == null) {
+			return null;
+		}
+		var x = this.h.item;
+		this.h = this.h.next;
+		if(this.h == null) {
+			this.q = null;
+		}
+		this.length--;
+		return x;
+	}
+	,__class__: haxe_ds_List
+};
+var haxe_ds__$List_ListNode = function(item,next) {
+	this.item = item;
+	this.next = next;
+};
+haxe_ds__$List_ListNode.__name__ = "haxe.ds._List.ListNode";
+haxe_ds__$List_ListNode.prototype = {
+	__class__: haxe_ds__$List_ListNode
+};
 var haxe_ds_StringMap = function() {
 	this.h = Object.create(null);
 };
@@ -1791,6 +2759,22 @@ haxe_ds_StringMap.__name__ = "haxe.ds.StringMap";
 haxe_ds_StringMap.__interfaces__ = [haxe_IMap];
 haxe_ds_StringMap.prototype = {
 	__class__: haxe_ds_StringMap
+};
+var haxe_ds__$StringMap_StringMapKeyIterator = function(h) {
+	this.h = h;
+	this.keys = Object.keys(h);
+	this.length = this.keys.length;
+	this.current = 0;
+};
+haxe_ds__$StringMap_StringMapKeyIterator.__name__ = "haxe.ds._StringMap.StringMapKeyIterator";
+haxe_ds__$StringMap_StringMapKeyIterator.prototype = {
+	hasNext: function() {
+		return this.current < this.length;
+	}
+	,next: function() {
+		return this.keys[this.current++];
+	}
+	,__class__: haxe_ds__$StringMap_StringMapKeyIterator
 };
 var haxe_ds_Vector = {};
 haxe_ds_Vector.blit = function(src,srcPos,dest,destPos,len) {
@@ -1859,6 +2843,170 @@ var haxe_io_Error = $hxEnums["haxe.io.Error"] = { __ename__:true,__constructs__:
 	,Custom: ($_=function(e) { return {_hx_index:3,e:e,__enum__:"haxe.io.Error",toString:$estr}; },$_._hx_name="Custom",$_.__params__ = ["e"],$_)
 };
 haxe_io_Error.__constructs__ = [haxe_io_Error.Blocked,haxe_io_Error.Overflow,haxe_io_Error.OutsideBounds,haxe_io_Error.Custom];
+var haxe_io_Path = function(path) {
+	switch(path) {
+	case ".":case "..":
+		this.dir = path;
+		this.file = "";
+		return;
+	}
+	var c1 = path.lastIndexOf("/");
+	var c2 = path.lastIndexOf("\\");
+	if(c1 < c2) {
+		this.dir = HxOverrides.substr(path,0,c2);
+		path = HxOverrides.substr(path,c2 + 1,null);
+		this.backslash = true;
+	} else if(c2 < c1) {
+		this.dir = HxOverrides.substr(path,0,c1);
+		path = HxOverrides.substr(path,c1 + 1,null);
+	} else {
+		this.dir = null;
+	}
+	var cp = path.lastIndexOf(".");
+	if(cp != -1) {
+		this.ext = HxOverrides.substr(path,cp + 1,null);
+		this.file = HxOverrides.substr(path,0,cp);
+	} else {
+		this.ext = null;
+		this.file = path;
+	}
+};
+haxe_io_Path.__name__ = "haxe.io.Path";
+haxe_io_Path.directory = function(path) {
+	var s = new haxe_io_Path(path);
+	if(s.dir == null) {
+		return "";
+	}
+	return s.dir;
+};
+haxe_io_Path.join = function(paths) {
+	var _g = [];
+	var _g1 = 0;
+	var _g2 = paths;
+	while(_g1 < _g2.length) {
+		var v = _g2[_g1];
+		++_g1;
+		if(v != null && v != "") {
+			_g.push(v);
+		}
+	}
+	var paths = _g;
+	if(paths.length == 0) {
+		return "";
+	}
+	var path = paths[0];
+	var _g = 1;
+	var _g1 = paths.length;
+	while(_g < _g1) {
+		var i = _g++;
+		path = haxe_io_Path.addTrailingSlash(path);
+		path += paths[i];
+	}
+	return haxe_io_Path.normalize(path);
+};
+haxe_io_Path.normalize = function(path) {
+	var slash = "/";
+	path = path.split("\\").join(slash);
+	if(path == slash) {
+		return slash;
+	}
+	var target = [];
+	var _g = 0;
+	var _g1 = path.split(slash);
+	while(_g < _g1.length) {
+		var token = _g1[_g];
+		++_g;
+		if(token == ".." && target.length > 0 && target[target.length - 1] != "..") {
+			target.pop();
+		} else if(token == "") {
+			if(target.length > 0 || HxOverrides.cca(path,0) == 47) {
+				target.push(token);
+			}
+		} else if(token != ".") {
+			target.push(token);
+		}
+	}
+	var tmp = target.join(slash);
+	var acc_b = "";
+	var colon = false;
+	var slashes = false;
+	var _g_offset = 0;
+	var _g_s = tmp;
+	while(_g_offset < _g_s.length) {
+		var s = _g_s;
+		var index = _g_offset++;
+		var c = s.charCodeAt(index);
+		if(c >= 55296 && c <= 56319) {
+			c = c - 55232 << 10 | s.charCodeAt(index + 1) & 1023;
+		}
+		var c1 = c;
+		if(c1 >= 65536) {
+			++_g_offset;
+		}
+		var c2 = c1;
+		switch(c2) {
+		case 47:
+			if(!colon) {
+				slashes = true;
+			} else {
+				var i = c2;
+				colon = false;
+				if(slashes) {
+					acc_b += "/";
+					slashes = false;
+				}
+				acc_b += String.fromCodePoint(i);
+			}
+			break;
+		case 58:
+			acc_b += ":";
+			colon = true;
+			break;
+		default:
+			var i1 = c2;
+			colon = false;
+			if(slashes) {
+				acc_b += "/";
+				slashes = false;
+			}
+			acc_b += String.fromCodePoint(i1);
+		}
+	}
+	return acc_b;
+};
+haxe_io_Path.addTrailingSlash = function(path) {
+	if(path.length == 0) {
+		return "/";
+	}
+	var c1 = path.lastIndexOf("/");
+	var c2 = path.lastIndexOf("\\");
+	if(c1 < c2) {
+		if(c2 != path.length - 1) {
+			return path + "\\";
+		} else {
+			return path;
+		}
+	} else if(c1 != path.length - 1) {
+		return path + "/";
+	} else {
+		return path;
+	}
+};
+haxe_io_Path.isAbsolute = function(path) {
+	if(StringTools.startsWith(path,"/")) {
+		return true;
+	}
+	if(path.charAt(1) == ":") {
+		return true;
+	}
+	if(StringTools.startsWith(path,"\\\\")) {
+		return true;
+	}
+	return false;
+};
+haxe_io_Path.prototype = {
+	__class__: haxe_io_Path
+};
 var haxe_iterators_ArrayIterator = function(array) {
 	this.current = 0;
 	this.array = array;
@@ -1872,6 +3020,9137 @@ haxe_iterators_ArrayIterator.prototype = {
 		return this.array[this.current++];
 	}
 	,__class__: haxe_iterators_ArrayIterator
+};
+var haxe_rtti_CType = $hxEnums["haxe.rtti.CType"] = { __ename__:true,__constructs__:null
+	,CUnknown: {_hx_name:"CUnknown",_hx_index:0,__enum__:"haxe.rtti.CType",toString:$estr}
+	,CEnum: ($_=function(name,params) { return {_hx_index:1,name:name,params:params,__enum__:"haxe.rtti.CType",toString:$estr}; },$_._hx_name="CEnum",$_.__params__ = ["name","params"],$_)
+	,CClass: ($_=function(name,params) { return {_hx_index:2,name:name,params:params,__enum__:"haxe.rtti.CType",toString:$estr}; },$_._hx_name="CClass",$_.__params__ = ["name","params"],$_)
+	,CTypedef: ($_=function(name,params) { return {_hx_index:3,name:name,params:params,__enum__:"haxe.rtti.CType",toString:$estr}; },$_._hx_name="CTypedef",$_.__params__ = ["name","params"],$_)
+	,CFunction: ($_=function(args,ret) { return {_hx_index:4,args:args,ret:ret,__enum__:"haxe.rtti.CType",toString:$estr}; },$_._hx_name="CFunction",$_.__params__ = ["args","ret"],$_)
+	,CAnonymous: ($_=function(fields) { return {_hx_index:5,fields:fields,__enum__:"haxe.rtti.CType",toString:$estr}; },$_._hx_name="CAnonymous",$_.__params__ = ["fields"],$_)
+	,CDynamic: ($_=function(t) { return {_hx_index:6,t:t,__enum__:"haxe.rtti.CType",toString:$estr}; },$_._hx_name="CDynamic",$_.__params__ = ["t"],$_)
+	,CAbstract: ($_=function(name,params) { return {_hx_index:7,name:name,params:params,__enum__:"haxe.rtti.CType",toString:$estr}; },$_._hx_name="CAbstract",$_.__params__ = ["name","params"],$_)
+};
+haxe_rtti_CType.__constructs__ = [haxe_rtti_CType.CUnknown,haxe_rtti_CType.CEnum,haxe_rtti_CType.CClass,haxe_rtti_CType.CTypedef,haxe_rtti_CType.CFunction,haxe_rtti_CType.CAnonymous,haxe_rtti_CType.CDynamic,haxe_rtti_CType.CAbstract];
+var haxe_rtti_Rights = $hxEnums["haxe.rtti.Rights"] = { __ename__:true,__constructs__:null
+	,RNormal: {_hx_name:"RNormal",_hx_index:0,__enum__:"haxe.rtti.Rights",toString:$estr}
+	,RNo: {_hx_name:"RNo",_hx_index:1,__enum__:"haxe.rtti.Rights",toString:$estr}
+	,RCall: ($_=function(m) { return {_hx_index:2,m:m,__enum__:"haxe.rtti.Rights",toString:$estr}; },$_._hx_name="RCall",$_.__params__ = ["m"],$_)
+	,RMethod: {_hx_name:"RMethod",_hx_index:3,__enum__:"haxe.rtti.Rights",toString:$estr}
+	,RDynamic: {_hx_name:"RDynamic",_hx_index:4,__enum__:"haxe.rtti.Rights",toString:$estr}
+	,RInline: {_hx_name:"RInline",_hx_index:5,__enum__:"haxe.rtti.Rights",toString:$estr}
+};
+haxe_rtti_Rights.__constructs__ = [haxe_rtti_Rights.RNormal,haxe_rtti_Rights.RNo,haxe_rtti_Rights.RCall,haxe_rtti_Rights.RMethod,haxe_rtti_Rights.RDynamic,haxe_rtti_Rights.RInline];
+var haxe_rtti_TypeTree = $hxEnums["haxe.rtti.TypeTree"] = { __ename__:true,__constructs__:null
+	,TPackage: ($_=function(name,full,subs) { return {_hx_index:0,name:name,full:full,subs:subs,__enum__:"haxe.rtti.TypeTree",toString:$estr}; },$_._hx_name="TPackage",$_.__params__ = ["name","full","subs"],$_)
+	,TClassdecl: ($_=function(c) { return {_hx_index:1,c:c,__enum__:"haxe.rtti.TypeTree",toString:$estr}; },$_._hx_name="TClassdecl",$_.__params__ = ["c"],$_)
+	,TEnumdecl: ($_=function(e) { return {_hx_index:2,e:e,__enum__:"haxe.rtti.TypeTree",toString:$estr}; },$_._hx_name="TEnumdecl",$_.__params__ = ["e"],$_)
+	,TTypedecl: ($_=function(t) { return {_hx_index:3,t:t,__enum__:"haxe.rtti.TypeTree",toString:$estr}; },$_._hx_name="TTypedecl",$_.__params__ = ["t"],$_)
+	,TAbstractdecl: ($_=function(a) { return {_hx_index:4,a:a,__enum__:"haxe.rtti.TypeTree",toString:$estr}; },$_._hx_name="TAbstractdecl",$_.__params__ = ["a"],$_)
+};
+haxe_rtti_TypeTree.__constructs__ = [haxe_rtti_TypeTree.TPackage,haxe_rtti_TypeTree.TClassdecl,haxe_rtti_TypeTree.TEnumdecl,haxe_rtti_TypeTree.TTypedecl,haxe_rtti_TypeTree.TAbstractdecl];
+var haxe_rtti_TypeApi = function() { };
+haxe_rtti_TypeApi.__name__ = "haxe.rtti.TypeApi";
+haxe_rtti_TypeApi.typeInfos = function(t) {
+	var inf;
+	switch(t._hx_index) {
+	case 0:
+		var _g = t.name;
+		var _g = t.full;
+		var _g = t.subs;
+		throw haxe_Exception.thrown("Unexpected Package");
+	case 1:
+		var c = t.c;
+		inf = c;
+		break;
+	case 2:
+		var e = t.e;
+		inf = e;
+		break;
+	case 3:
+		var t1 = t.t;
+		inf = t1;
+		break;
+	case 4:
+		var a = t.a;
+		inf = a;
+		break;
+	}
+	return inf;
+};
+haxe_rtti_TypeApi.leq = function(f,l1,l2) {
+	var it_current = 0;
+	var it_array = l2;
+	var _g = 0;
+	while(_g < l1.length) {
+		var e1 = l1[_g];
+		++_g;
+		if(it_current >= it_array.length) {
+			return false;
+		}
+		var e2 = it_array[it_current++];
+		if(!f(e1,e2)) {
+			return false;
+		}
+	}
+	if(it_current < it_array.length) {
+		return false;
+	}
+	return true;
+};
+haxe_rtti_TypeApi.rightsEq = function(r1,r2) {
+	if(r1 == r2) {
+		return true;
+	}
+	if(r1._hx_index == 2) {
+		var m1 = r1.m;
+		if(r2._hx_index == 2) {
+			var m2 = r2.m;
+			return m1 == m2;
+		}
+	}
+	return false;
+};
+haxe_rtti_TypeApi.typeEq = function(t1,t2) {
+	switch(t1._hx_index) {
+	case 0:
+		return t2 == haxe_rtti_CType.CUnknown;
+	case 1:
+		var name = t1.name;
+		var params = t1.params;
+		if(t2._hx_index == 1) {
+			var name2 = t2.name;
+			var params2 = t2.params;
+			if(name == name2) {
+				return haxe_rtti_TypeApi.leq(haxe_rtti_TypeApi.typeEq,params,params2);
+			} else {
+				return false;
+			}
+		}
+		break;
+	case 2:
+		var name = t1.name;
+		var params = t1.params;
+		if(t2._hx_index == 2) {
+			var name2 = t2.name;
+			var params2 = t2.params;
+			if(name == name2) {
+				return haxe_rtti_TypeApi.leq(haxe_rtti_TypeApi.typeEq,params,params2);
+			} else {
+				return false;
+			}
+		}
+		break;
+	case 3:
+		var name = t1.name;
+		var params = t1.params;
+		if(t2._hx_index == 3) {
+			var name2 = t2.name;
+			var params2 = t2.params;
+			if(name == name2) {
+				return haxe_rtti_TypeApi.leq(haxe_rtti_TypeApi.typeEq,params,params2);
+			} else {
+				return false;
+			}
+		}
+		break;
+	case 4:
+		var args = t1.args;
+		var ret = t1.ret;
+		if(t2._hx_index == 4) {
+			var args2 = t2.args;
+			var ret2 = t2.ret;
+			if(haxe_rtti_TypeApi.leq(function(a,b) {
+				if(a.name == b.name && a.opt == b.opt) {
+					return haxe_rtti_TypeApi.typeEq(a.t,b.t);
+				} else {
+					return false;
+				}
+			},args,args2)) {
+				return haxe_rtti_TypeApi.typeEq(ret,ret2);
+			} else {
+				return false;
+			}
+		}
+		break;
+	case 5:
+		var fields = t1.fields;
+		if(t2._hx_index == 5) {
+			var fields2 = t2.fields;
+			return haxe_rtti_TypeApi.leq(function(a,b) {
+				return haxe_rtti_TypeApi.fieldEq(a,b);
+			},fields,fields2);
+		}
+		break;
+	case 6:
+		var t = t1.t;
+		if(t2._hx_index == 6) {
+			var t21 = t2.t;
+			if(t == null != (t21 == null)) {
+				return false;
+			}
+			if(t != null) {
+				return haxe_rtti_TypeApi.typeEq(t,t21);
+			} else {
+				return true;
+			}
+		}
+		break;
+	case 7:
+		var name = t1.name;
+		var params = t1.params;
+		if(t2._hx_index == 7) {
+			var name2 = t2.name;
+			var params2 = t2.params;
+			if(name == name2) {
+				return haxe_rtti_TypeApi.leq(haxe_rtti_TypeApi.typeEq,params,params2);
+			} else {
+				return false;
+			}
+		}
+		break;
+	}
+	return false;
+};
+haxe_rtti_TypeApi.fieldEq = function(f1,f2) {
+	if(f1.name != f2.name) {
+		return false;
+	}
+	if(!haxe_rtti_TypeApi.typeEq(f1.type,f2.type)) {
+		return false;
+	}
+	if(f1.isPublic != f2.isPublic) {
+		return false;
+	}
+	if(f1.doc != f2.doc) {
+		return false;
+	}
+	if(!haxe_rtti_TypeApi.rightsEq(f1.get,f2.get)) {
+		return false;
+	}
+	if(!haxe_rtti_TypeApi.rightsEq(f1.set,f2.set)) {
+		return false;
+	}
+	if(f1.params == null != (f2.params == null)) {
+		return false;
+	}
+	if(f1.params != null && f1.params.join(":") != f2.params.join(":")) {
+		return false;
+	}
+	return true;
+};
+haxe_rtti_TypeApi.constructorEq = function(c1,c2) {
+	if(c1.name != c2.name) {
+		return false;
+	}
+	if(c1.doc != c2.doc) {
+		return false;
+	}
+	if(c1.args == null != (c2.args == null)) {
+		return false;
+	}
+	if(c1.args != null && !haxe_rtti_TypeApi.leq(function(a,b) {
+		if(a.name == b.name && a.opt == b.opt) {
+			return haxe_rtti_TypeApi.typeEq(a.t,b.t);
+		} else {
+			return false;
+		}
+	},c1.args,c2.args)) {
+		return false;
+	}
+	return true;
+};
+var haxe_rtti_XmlParser = function() {
+	this.root = [];
+};
+haxe_rtti_XmlParser.__name__ = "haxe.rtti.XmlParser";
+haxe_rtti_XmlParser.prototype = {
+	process: function(x,platform) {
+		this.curplatform = platform;
+		if(x.nodeType != Xml.Document && x.nodeType != Xml.Element) {
+			throw haxe_Exception.thrown("Invalid nodeType " + (x.nodeType == null ? "null" : XmlType.toString(x.nodeType)));
+		}
+		this.xroot(x);
+	}
+	,mergeRights: function(f1,f2) {
+		if(f1.get == haxe_rtti_Rights.RInline && f1.set == haxe_rtti_Rights.RNo && f2.get == haxe_rtti_Rights.RNormal && f2.set == haxe_rtti_Rights.RMethod) {
+			f1.get = haxe_rtti_Rights.RNormal;
+			f1.set = haxe_rtti_Rights.RMethod;
+			return true;
+		}
+		if(Type.enumEq(f1.get,f2.get)) {
+			return Type.enumEq(f1.set,f2.set);
+		} else {
+			return false;
+		}
+	}
+	,mergeDoc: function(f1,f2) {
+		if(f1.doc == null) {
+			f1.doc = f2.doc;
+		} else if(f2.doc == null) {
+			f2.doc = f1.doc;
+		}
+		return true;
+	}
+	,mergeFields: function(f,f2) {
+		if(!haxe_rtti_TypeApi.fieldEq(f,f2)) {
+			if(f.name == f2.name && (this.mergeRights(f,f2) || this.mergeRights(f2,f)) && this.mergeDoc(f,f2)) {
+				return haxe_rtti_TypeApi.fieldEq(f,f2);
+			} else {
+				return false;
+			}
+		} else {
+			return true;
+		}
+	}
+	,newField: function(c,f) {
+	}
+	,mergeClasses: function(c,c2) {
+		if(c.isInterface != c2.isInterface) {
+			return false;
+		}
+		if(this.curplatform != null) {
+			c.platforms.push(this.curplatform);
+		}
+		if(c.isExtern != c2.isExtern) {
+			c.isExtern = false;
+		}
+		var _g = 0;
+		var _g1 = c2.fields;
+		while(_g < _g1.length) {
+			var f2 = _g1[_g];
+			++_g;
+			var found = null;
+			var _g2 = 0;
+			var _g3 = c.fields;
+			while(_g2 < _g3.length) {
+				var f = _g3[_g2];
+				++_g2;
+				if(this.mergeFields(f,f2)) {
+					found = f;
+					break;
+				}
+			}
+			if(found == null) {
+				this.newField(c,f2);
+				c.fields.push(f2);
+			} else if(this.curplatform != null) {
+				found.platforms.push(this.curplatform);
+			}
+		}
+		var _g = 0;
+		var _g1 = c2.statics;
+		while(_g < _g1.length) {
+			var f2 = _g1[_g];
+			++_g;
+			var found = null;
+			var _g2 = 0;
+			var _g3 = c.statics;
+			while(_g2 < _g3.length) {
+				var f = _g3[_g2];
+				++_g2;
+				if(this.mergeFields(f,f2)) {
+					found = f;
+					break;
+				}
+			}
+			if(found == null) {
+				this.newField(c,f2);
+				c.statics.push(f2);
+			} else if(this.curplatform != null) {
+				found.platforms.push(this.curplatform);
+			}
+		}
+		return true;
+	}
+	,mergeEnums: function(e,e2) {
+		if(e.isExtern != e2.isExtern) {
+			return false;
+		}
+		if(this.curplatform != null) {
+			e.platforms.push(this.curplatform);
+		}
+		var _g = 0;
+		var _g1 = e2.constructors;
+		while(_g < _g1.length) {
+			var c2 = _g1[_g];
+			++_g;
+			var found = null;
+			var _g2 = 0;
+			var _g3 = e.constructors;
+			while(_g2 < _g3.length) {
+				var c = _g3[_g2];
+				++_g2;
+				if(haxe_rtti_TypeApi.constructorEq(c,c2)) {
+					found = c;
+					break;
+				}
+			}
+			if(found == null) {
+				e.constructors.push(c2);
+			} else if(this.curplatform != null) {
+				found.platforms.push(this.curplatform);
+			}
+		}
+		return true;
+	}
+	,mergeTypedefs: function(t,t2) {
+		if(this.curplatform == null) {
+			return false;
+		}
+		t.platforms.push(this.curplatform);
+		t.types.h[this.curplatform] = t2.type;
+		return true;
+	}
+	,mergeAbstracts: function(a,a2) {
+		if(this.curplatform == null) {
+			return false;
+		}
+		if(a.to.length != a2.to.length || a.from.length != a2.from.length) {
+			return false;
+		}
+		var _g = 0;
+		var _g1 = a.to.length;
+		while(_g < _g1) {
+			var i = _g++;
+			if(!haxe_rtti_TypeApi.typeEq(a.to[i].t,a2.to[i].t)) {
+				return false;
+			}
+		}
+		var _g = 0;
+		var _g1 = a.from.length;
+		while(_g < _g1) {
+			var i = _g++;
+			if(!haxe_rtti_TypeApi.typeEq(a.from[i].t,a2.from[i].t)) {
+				return false;
+			}
+		}
+		if(a2.impl != null) {
+			this.mergeClasses(a.impl,a2.impl);
+		}
+		a.platforms.push(this.curplatform);
+		return true;
+	}
+	,merge: function(t) {
+		var inf = haxe_rtti_TypeApi.typeInfos(t);
+		var pack = inf.path.split(".");
+		var cur = this.root;
+		var curpack = [];
+		pack.pop();
+		var _g = 0;
+		while(_g < pack.length) {
+			var p = pack[_g];
+			++_g;
+			var found = false;
+			var _g1 = 0;
+			while(_g1 < cur.length) {
+				var pk = cur[_g1];
+				++_g1;
+				if(pk._hx_index == 0) {
+					var _g2 = pk.full;
+					var pname = pk.name;
+					var subs = pk.subs;
+					if(pname == p) {
+						found = true;
+						cur = subs;
+						break;
+					}
+				}
+			}
+			curpack.push(p);
+			if(!found) {
+				var pk1 = [];
+				cur.push(haxe_rtti_TypeTree.TPackage(p,curpack.join("."),pk1));
+				cur = pk1;
+			}
+		}
+		var _g = 0;
+		while(_g < cur.length) {
+			var ct = cur[_g];
+			++_g;
+			var tmp;
+			if(ct._hx_index == 0) {
+				var _g1 = ct.name;
+				var _g2 = ct.full;
+				var _g3 = ct.subs;
+				tmp = true;
+			} else {
+				tmp = false;
+			}
+			if(tmp) {
+				continue;
+			}
+			var tinf = haxe_rtti_TypeApi.typeInfos(ct);
+			if(tinf.path == inf.path) {
+				var sameType = true;
+				if(tinf.doc == null != (inf.doc == null)) {
+					if(inf.doc == null) {
+						inf.doc = tinf.doc;
+					} else {
+						tinf.doc = inf.doc;
+					}
+				}
+				if(tinf.path == "haxe._Int64.NativeInt64") {
+					continue;
+				}
+				if(tinf.module == inf.module && tinf.doc == inf.doc && tinf.isPrivate == inf.isPrivate) {
+					switch(ct._hx_index) {
+					case 0:
+						var _g4 = ct.name;
+						var _g5 = ct.full;
+						var _g6 = ct.subs;
+						sameType = false;
+						break;
+					case 1:
+						var c = ct.c;
+						if(t._hx_index == 1) {
+							var c2 = t.c;
+							if(this.mergeClasses(c,c2)) {
+								return;
+							}
+						} else {
+							sameType = false;
+						}
+						break;
+					case 2:
+						var e = ct.e;
+						if(t._hx_index == 2) {
+							var e2 = t.e;
+							if(this.mergeEnums(e,e2)) {
+								return;
+							}
+						} else {
+							sameType = false;
+						}
+						break;
+					case 3:
+						var td = ct.t;
+						if(t._hx_index == 3) {
+							var td2 = t.t;
+							if(this.mergeTypedefs(td,td2)) {
+								return;
+							}
+						}
+						break;
+					case 4:
+						var a = ct.a;
+						if(t._hx_index == 4) {
+							var a2 = t.a;
+							if(this.mergeAbstracts(a,a2)) {
+								return;
+							}
+						} else {
+							sameType = false;
+						}
+						break;
+					}
+				}
+				var msg = tinf.module != inf.module ? "module " + inf.module + " should be " + tinf.module : tinf.doc != inf.doc ? "documentation is different" : tinf.isPrivate != inf.isPrivate ? "private flag is different" : !sameType ? "type kind is different" : "could not merge definition";
+				throw haxe_Exception.thrown("Incompatibilities between " + tinf.path + " in " + tinf.platforms.join(",") + " and " + this.curplatform + " (" + msg + ")");
+			}
+		}
+		cur.push(t);
+	}
+	,mkPath: function(p) {
+		return p;
+	}
+	,mkTypeParams: function(p) {
+		var pl = p.split(":");
+		if(pl[0] == "") {
+			return [];
+		}
+		return pl;
+	}
+	,mkRights: function(r) {
+		switch(r) {
+		case "dynamic":
+			return haxe_rtti_Rights.RDynamic;
+		case "inline":
+			return haxe_rtti_Rights.RInline;
+		case "method":
+			return haxe_rtti_Rights.RMethod;
+		case "null":
+			return haxe_rtti_Rights.RNo;
+		default:
+			return haxe_rtti_Rights.RCall(r);
+		}
+	}
+	,xerror: function(c) {
+		var tmp;
+		if(c.nodeType == Xml.Document) {
+			tmp = "Document";
+		} else {
+			if(c.nodeType != Xml.Element) {
+				throw haxe_Exception.thrown("Bad node type, expected Element but found " + (c.nodeType == null ? "null" : XmlType.toString(c.nodeType)));
+			}
+			tmp = c.nodeName;
+		}
+		throw haxe_Exception.thrown("Invalid " + tmp);
+	}
+	,xroot: function(x) {
+		var c = x.elements();
+		while(c.hasNext()) {
+			var c1 = c.next();
+			this.merge(this.processElement(c1));
+		}
+	}
+	,processElement: function(x) {
+		if(x.nodeType != Xml.Document && x.nodeType != Xml.Element) {
+			throw haxe_Exception.thrown("Invalid nodeType " + (x.nodeType == null ? "null" : XmlType.toString(x.nodeType)));
+		}
+		var c = x;
+		var _g;
+		if(c.nodeType == Xml.Document) {
+			_g = "Document";
+		} else {
+			if(c.nodeType != Xml.Element) {
+				throw haxe_Exception.thrown("Bad node type, expected Element but found " + (c.nodeType == null ? "null" : XmlType.toString(c.nodeType)));
+			}
+			_g = c.nodeName;
+		}
+		switch(_g) {
+		case "abstract":
+			return haxe_rtti_TypeTree.TAbstractdecl(this.xabstract(c));
+		case "class":
+			return haxe_rtti_TypeTree.TClassdecl(this.xclass(c));
+		case "enum":
+			return haxe_rtti_TypeTree.TEnumdecl(this.xenum(c));
+		case "typedef":
+			return haxe_rtti_TypeTree.TTypedecl(this.xtypedef(c));
+		default:
+			return this.xerror(c);
+		}
+	}
+	,xmeta: function(x) {
+		var ml = [];
+		var _g = 0;
+		var _g1 = haxe_xml__$Access_NodeListAccess.resolve(x,"m");
+		while(_g < _g1.length) {
+			var m = _g1[_g];
+			++_g;
+			var pl = [];
+			var _g2 = 0;
+			var _g3 = haxe_xml__$Access_NodeListAccess.resolve(m,"e");
+			while(_g2 < _g3.length) {
+				var p = _g3[_g2];
+				++_g2;
+				pl.push(haxe_xml_Access.get_innerHTML(p));
+			}
+			ml.push({ name : haxe_xml__$Access_AttribAccess.resolve(m,"n"), params : pl});
+		}
+		return ml;
+	}
+	,xoverloads: function(x) {
+		var l = [];
+		var m = x.elements();
+		while(m.hasNext()) {
+			var m1 = m.next();
+			l.push(this.xclassfield(m1));
+		}
+		return l;
+	}
+	,xpath: function(x) {
+		var path = this.mkPath(haxe_xml__$Access_AttribAccess.resolve(x,"path"));
+		var params = [];
+		var c = x.elements();
+		while(c.hasNext()) {
+			var c1 = c.next();
+			params.push(this.xtype(c1));
+		}
+		return { path : path, params : params};
+	}
+	,xclass: function(x) {
+		var csuper = null;
+		var doc = null;
+		var tdynamic = null;
+		var interfaces = [];
+		var fields = [];
+		var statics = [];
+		var meta = [];
+		var isInterface = x.exists("interface");
+		var c = x.elements();
+		while(c.hasNext()) {
+			var c1 = c.next();
+			var _g;
+			if(c1.nodeType == Xml.Document) {
+				_g = "Document";
+			} else {
+				if(c1.nodeType != Xml.Element) {
+					throw haxe_Exception.thrown("Bad node type, expected Element but found " + (c1.nodeType == null ? "null" : XmlType.toString(c1.nodeType)));
+				}
+				_g = c1.nodeName;
+			}
+			switch(_g) {
+			case "extends":
+				if(isInterface) {
+					interfaces.push(this.xpath(c1));
+				} else {
+					csuper = this.xpath(c1);
+				}
+				break;
+			case "haxe_doc":
+				doc = haxe_xml_Access.get_innerData(c1);
+				break;
+			case "haxe_dynamic":
+				var x1 = c1.firstElement();
+				if(x1.nodeType != Xml.Document && x1.nodeType != Xml.Element) {
+					throw haxe_Exception.thrown("Invalid nodeType " + (x1.nodeType == null ? "null" : XmlType.toString(x1.nodeType)));
+				}
+				tdynamic = this.xtype(x1);
+				break;
+			case "implements":
+				interfaces.push(this.xpath(c1));
+				break;
+			case "meta":
+				meta = this.xmeta(c1);
+				break;
+			default:
+				if(c1.exists("static")) {
+					statics.push(this.xclassfield(c1));
+				} else {
+					fields.push(this.xclassfield(c1));
+				}
+			}
+		}
+		return { file : haxe_xml__$Access_HasAttribAccess.resolve(x,"file") ? haxe_xml__$Access_AttribAccess.resolve(x,"file") : null, path : this.mkPath(haxe_xml__$Access_AttribAccess.resolve(x,"path")), module : haxe_xml__$Access_HasAttribAccess.resolve(x,"module") ? this.mkPath(haxe_xml__$Access_AttribAccess.resolve(x,"module")) : null, doc : doc, isPrivate : x.exists("private"), isExtern : x.exists("extern"), isFinal : x.exists("final"), isInterface : isInterface, params : this.mkTypeParams(haxe_xml__$Access_AttribAccess.resolve(x,"params")), superClass : csuper, interfaces : interfaces, fields : fields, statics : statics, tdynamic : tdynamic, platforms : this.defplat(), meta : meta};
+	}
+	,xclassfield: function(x,defPublic) {
+		if(defPublic == null) {
+			defPublic = false;
+		}
+		var e = x.elements();
+		var t = this.xtype(e.next());
+		var doc = null;
+		var meta = [];
+		var overloads = null;
+		var c = e;
+		while(c.hasNext()) {
+			var c1 = c.next();
+			var _g;
+			if(c1.nodeType == Xml.Document) {
+				_g = "Document";
+			} else {
+				if(c1.nodeType != Xml.Element) {
+					throw haxe_Exception.thrown("Bad node type, expected Element but found " + (c1.nodeType == null ? "null" : XmlType.toString(c1.nodeType)));
+				}
+				_g = c1.nodeName;
+			}
+			switch(_g) {
+			case "haxe_doc":
+				doc = haxe_xml_Access.get_innerData(c1);
+				break;
+			case "meta":
+				meta = this.xmeta(c1);
+				break;
+			case "overloads":
+				overloads = this.xoverloads(c1);
+				break;
+			default:
+				this.xerror(c1);
+			}
+		}
+		var tmp;
+		if(x.nodeType == Xml.Document) {
+			tmp = "Document";
+		} else {
+			if(x.nodeType != Xml.Element) {
+				throw haxe_Exception.thrown("Bad node type, expected Element but found " + (x.nodeType == null ? "null" : XmlType.toString(x.nodeType)));
+			}
+			tmp = x.nodeName;
+		}
+		return { name : tmp, type : t, isPublic : x.exists("public") || defPublic, isFinal : x.exists("final"), isOverride : x.exists("override"), line : haxe_xml__$Access_HasAttribAccess.resolve(x,"line") ? Std.parseInt(haxe_xml__$Access_AttribAccess.resolve(x,"line")) : null, doc : doc, get : haxe_xml__$Access_HasAttribAccess.resolve(x,"get") ? this.mkRights(haxe_xml__$Access_AttribAccess.resolve(x,"get")) : haxe_rtti_Rights.RNormal, set : haxe_xml__$Access_HasAttribAccess.resolve(x,"set") ? this.mkRights(haxe_xml__$Access_AttribAccess.resolve(x,"set")) : haxe_rtti_Rights.RNormal, params : haxe_xml__$Access_HasAttribAccess.resolve(x,"params") ? this.mkTypeParams(haxe_xml__$Access_AttribAccess.resolve(x,"params")) : [], platforms : this.defplat(), meta : meta, overloads : overloads, expr : haxe_xml__$Access_HasAttribAccess.resolve(x,"expr") ? haxe_xml__$Access_AttribAccess.resolve(x,"expr") : null};
+	}
+	,xenum: function(x) {
+		var cl = [];
+		var doc = null;
+		var meta = [];
+		var c = x.elements();
+		while(c.hasNext()) {
+			var c1 = c.next();
+			var tmp;
+			if(c1.nodeType == Xml.Document) {
+				tmp = "Document";
+			} else {
+				if(c1.nodeType != Xml.Element) {
+					throw haxe_Exception.thrown("Bad node type, expected Element but found " + (c1.nodeType == null ? "null" : XmlType.toString(c1.nodeType)));
+				}
+				tmp = c1.nodeName;
+			}
+			if(tmp == "haxe_doc") {
+				doc = haxe_xml_Access.get_innerData(c1);
+			} else {
+				var tmp1;
+				if(c1.nodeType == Xml.Document) {
+					tmp1 = "Document";
+				} else {
+					if(c1.nodeType != Xml.Element) {
+						throw haxe_Exception.thrown("Bad node type, expected Element but found " + (c1.nodeType == null ? "null" : XmlType.toString(c1.nodeType)));
+					}
+					tmp1 = c1.nodeName;
+				}
+				if(tmp1 == "meta") {
+					meta = this.xmeta(c1);
+				} else {
+					cl.push(this.xenumfield(c1));
+				}
+			}
+		}
+		return { file : haxe_xml__$Access_HasAttribAccess.resolve(x,"file") ? haxe_xml__$Access_AttribAccess.resolve(x,"file") : null, path : this.mkPath(haxe_xml__$Access_AttribAccess.resolve(x,"path")), module : haxe_xml__$Access_HasAttribAccess.resolve(x,"module") ? this.mkPath(haxe_xml__$Access_AttribAccess.resolve(x,"module")) : null, doc : doc, isPrivate : x.exists("private"), isExtern : x.exists("extern"), params : this.mkTypeParams(haxe_xml__$Access_AttribAccess.resolve(x,"params")), constructors : cl, platforms : this.defplat(), meta : meta};
+	}
+	,xenumfield: function(x) {
+		var args = null;
+		var docElements = x.elementsNamed("haxe_doc");
+		var xdoc = docElements.hasNext() ? docElements.next() : null;
+		var meta = haxe_xml__$Access_HasNodeAccess.resolve(x,"meta") ? this.xmeta(haxe_xml__$Access_NodeAccess.resolve(x,"meta")) : [];
+		if(haxe_xml__$Access_HasAttribAccess.resolve(x,"a")) {
+			var names = haxe_xml__$Access_AttribAccess.resolve(x,"a").split(":");
+			var elts = x.elements();
+			args = [];
+			var _g = 0;
+			while(_g < names.length) {
+				var c = names[_g];
+				++_g;
+				var opt = false;
+				if(c.charAt(0) == "?") {
+					opt = true;
+					c = HxOverrides.substr(c,1,null);
+				}
+				args.push({ name : c, opt : opt, t : this.xtype(elts.next())});
+			}
+		}
+		var tmp;
+		if(x.nodeType == Xml.Document) {
+			tmp = "Document";
+		} else {
+			if(x.nodeType != Xml.Element) {
+				throw haxe_Exception.thrown("Bad node type, expected Element but found " + (x.nodeType == null ? "null" : XmlType.toString(x.nodeType)));
+			}
+			tmp = x.nodeName;
+		}
+		var tmp1;
+		if(xdoc == null) {
+			tmp1 = null;
+		} else {
+			if(xdoc.nodeType != Xml.Document && xdoc.nodeType != Xml.Element) {
+				throw haxe_Exception.thrown("Invalid nodeType " + (xdoc.nodeType == null ? "null" : XmlType.toString(xdoc.nodeType)));
+			}
+			tmp1 = haxe_xml_Access.get_innerData(xdoc);
+		}
+		return { name : tmp, args : args, doc : tmp1, meta : meta, platforms : this.defplat()};
+	}
+	,xabstract: function(x) {
+		var doc = null;
+		var impl = null;
+		var athis = null;
+		var meta = [];
+		var to = [];
+		var from = [];
+		var c = x.elements();
+		while(c.hasNext()) {
+			var c1 = c.next();
+			var _g;
+			if(c1.nodeType == Xml.Document) {
+				_g = "Document";
+			} else {
+				if(c1.nodeType != Xml.Element) {
+					throw haxe_Exception.thrown("Bad node type, expected Element but found " + (c1.nodeType == null ? "null" : XmlType.toString(c1.nodeType)));
+				}
+				_g = c1.nodeName;
+			}
+			switch(_g) {
+			case "from":
+				var t = c1.elements();
+				while(t.hasNext()) {
+					var t1 = t.next();
+					var x1 = t1.firstElement();
+					if(x1.nodeType != Xml.Document && x1.nodeType != Xml.Element) {
+						throw haxe_Exception.thrown("Invalid nodeType " + (x1.nodeType == null ? "null" : XmlType.toString(x1.nodeType)));
+					}
+					from.push({ t : this.xtype(x1), field : haxe_xml__$Access_HasAttribAccess.resolve(t1,"field") ? haxe_xml__$Access_AttribAccess.resolve(t1,"field") : null});
+				}
+				break;
+			case "haxe_doc":
+				doc = haxe_xml_Access.get_innerData(c1);
+				break;
+			case "impl":
+				impl = this.xclass(haxe_xml__$Access_NodeAccess.resolve(c1,"class"));
+				break;
+			case "meta":
+				meta = this.xmeta(c1);
+				break;
+			case "this":
+				var x2 = c1.firstElement();
+				if(x2.nodeType != Xml.Document && x2.nodeType != Xml.Element) {
+					throw haxe_Exception.thrown("Invalid nodeType " + (x2.nodeType == null ? "null" : XmlType.toString(x2.nodeType)));
+				}
+				athis = this.xtype(x2);
+				break;
+			case "to":
+				var t2 = c1.elements();
+				while(t2.hasNext()) {
+					var t3 = t2.next();
+					var x3 = t3.firstElement();
+					if(x3.nodeType != Xml.Document && x3.nodeType != Xml.Element) {
+						throw haxe_Exception.thrown("Invalid nodeType " + (x3.nodeType == null ? "null" : XmlType.toString(x3.nodeType)));
+					}
+					to.push({ t : this.xtype(x3), field : haxe_xml__$Access_HasAttribAccess.resolve(t3,"field") ? haxe_xml__$Access_AttribAccess.resolve(t3,"field") : null});
+				}
+				break;
+			default:
+				this.xerror(c1);
+			}
+		}
+		return { file : haxe_xml__$Access_HasAttribAccess.resolve(x,"file") ? haxe_xml__$Access_AttribAccess.resolve(x,"file") : null, path : this.mkPath(haxe_xml__$Access_AttribAccess.resolve(x,"path")), module : haxe_xml__$Access_HasAttribAccess.resolve(x,"module") ? this.mkPath(haxe_xml__$Access_AttribAccess.resolve(x,"module")) : null, doc : doc, isPrivate : x.exists("private"), params : this.mkTypeParams(haxe_xml__$Access_AttribAccess.resolve(x,"params")), platforms : this.defplat(), meta : meta, athis : athis, to : to, from : from, impl : impl};
+	}
+	,xtypedef: function(x) {
+		var doc = null;
+		var t = null;
+		var meta = [];
+		var c = x.elements();
+		while(c.hasNext()) {
+			var c1 = c.next();
+			var tmp;
+			if(c1.nodeType == Xml.Document) {
+				tmp = "Document";
+			} else {
+				if(c1.nodeType != Xml.Element) {
+					throw haxe_Exception.thrown("Bad node type, expected Element but found " + (c1.nodeType == null ? "null" : XmlType.toString(c1.nodeType)));
+				}
+				tmp = c1.nodeName;
+			}
+			if(tmp == "haxe_doc") {
+				doc = haxe_xml_Access.get_innerData(c1);
+			} else {
+				var tmp1;
+				if(c1.nodeType == Xml.Document) {
+					tmp1 = "Document";
+				} else {
+					if(c1.nodeType != Xml.Element) {
+						throw haxe_Exception.thrown("Bad node type, expected Element but found " + (c1.nodeType == null ? "null" : XmlType.toString(c1.nodeType)));
+					}
+					tmp1 = c1.nodeName;
+				}
+				if(tmp1 == "meta") {
+					meta = this.xmeta(c1);
+				} else {
+					t = this.xtype(c1);
+				}
+			}
+		}
+		var types = new haxe_ds_StringMap();
+		if(this.curplatform != null) {
+			types.h[this.curplatform] = t;
+		}
+		return { file : haxe_xml__$Access_HasAttribAccess.resolve(x,"file") ? haxe_xml__$Access_AttribAccess.resolve(x,"file") : null, path : this.mkPath(haxe_xml__$Access_AttribAccess.resolve(x,"path")), module : haxe_xml__$Access_HasAttribAccess.resolve(x,"module") ? this.mkPath(haxe_xml__$Access_AttribAccess.resolve(x,"module")) : null, doc : doc, isPrivate : x.exists("private"), params : this.mkTypeParams(haxe_xml__$Access_AttribAccess.resolve(x,"params")), type : t, types : types, platforms : this.defplat(), meta : meta};
+	}
+	,xtype: function(x) {
+		var _g;
+		if(x.nodeType == Xml.Document) {
+			_g = "Document";
+		} else {
+			if(x.nodeType != Xml.Element) {
+				throw haxe_Exception.thrown("Bad node type, expected Element but found " + (x.nodeType == null ? "null" : XmlType.toString(x.nodeType)));
+			}
+			_g = x.nodeName;
+		}
+		switch(_g) {
+		case "a":
+			var fields = [];
+			var f = x.elements();
+			while(f.hasNext()) {
+				var f1 = f.next();
+				var f2 = this.xclassfield(f1,true);
+				f2.platforms = [];
+				fields.push(f2);
+			}
+			return haxe_rtti_CType.CAnonymous(fields);
+		case "c":
+			return haxe_rtti_CType.CClass(this.mkPath(haxe_xml__$Access_AttribAccess.resolve(x,"path")),this.xtypeparams(x));
+		case "d":
+			var t = null;
+			var tx = x.firstElement();
+			if(tx != null) {
+				if(tx.nodeType != Xml.Document && tx.nodeType != Xml.Element) {
+					throw haxe_Exception.thrown("Invalid nodeType " + (tx.nodeType == null ? "null" : XmlType.toString(tx.nodeType)));
+				}
+				t = this.xtype(tx);
+			}
+			return haxe_rtti_CType.CDynamic(t);
+		case "e":
+			return haxe_rtti_CType.CEnum(this.mkPath(haxe_xml__$Access_AttribAccess.resolve(x,"path")),this.xtypeparams(x));
+		case "f":
+			var args = [];
+			var aname = haxe_xml__$Access_AttribAccess.resolve(x,"a").split(":");
+			var eargs_current = 0;
+			var eargs_array = aname;
+			var evalues = haxe_xml__$Access_HasAttribAccess.resolve(x,"v") ? new haxe_iterators_ArrayIterator(haxe_xml__$Access_AttribAccess.resolve(x,"v").split(":")) : null;
+			var e = x.elements();
+			while(e.hasNext()) {
+				var e1 = e.next();
+				var opt = false;
+				var a = eargs_current < eargs_array.length ? eargs_array[eargs_current++] : null;
+				if(a == null) {
+					a = "";
+				}
+				if(a.charAt(0) == "?") {
+					opt = true;
+					a = HxOverrides.substr(a,1,null);
+				}
+				var v = evalues == null || evalues.current >= evalues.array.length ? null : evalues.array[evalues.current++];
+				args.push({ name : a, opt : opt, t : this.xtype(e1), value : v == "" ? null : v});
+			}
+			var ret = args[args.length - 1];
+			HxOverrides.remove(args,ret);
+			return haxe_rtti_CType.CFunction(args,ret.t);
+		case "t":
+			return haxe_rtti_CType.CTypedef(this.mkPath(haxe_xml__$Access_AttribAccess.resolve(x,"path")),this.xtypeparams(x));
+		case "unknown":
+			return haxe_rtti_CType.CUnknown;
+		case "x":
+			return haxe_rtti_CType.CAbstract(this.mkPath(haxe_xml__$Access_AttribAccess.resolve(x,"path")),this.xtypeparams(x));
+		default:
+			return this.xerror(x);
+		}
+	}
+	,xtypeparams: function(x) {
+		var p = [];
+		var c = x.elements();
+		while(c.hasNext()) {
+			var c1 = c.next();
+			p.push(this.xtype(c1));
+		}
+		return p;
+	}
+	,defplat: function() {
+		var l = [];
+		if(this.curplatform != null) {
+			l.push(this.curplatform);
+		}
+		return l;
+	}
+	,__class__: haxe_rtti_XmlParser
+};
+var haxe_xml__$Access_NodeAccess = {};
+haxe_xml__$Access_NodeAccess.resolve = function(this1,name) {
+	var x = this1.elementsNamed(name).next();
+	if(x == null) {
+		var xname;
+		if(this1.nodeType == Xml.Document) {
+			xname = "Document";
+		} else {
+			if(this1.nodeType != Xml.Element) {
+				throw haxe_Exception.thrown("Bad node type, expected Element but found " + (this1.nodeType == null ? "null" : XmlType.toString(this1.nodeType)));
+			}
+			xname = this1.nodeName;
+		}
+		throw haxe_Exception.thrown(xname + " is missing element " + name);
+	}
+	if(x.nodeType != Xml.Document && x.nodeType != Xml.Element) {
+		throw haxe_Exception.thrown("Invalid nodeType " + (x.nodeType == null ? "null" : XmlType.toString(x.nodeType)));
+	}
+	return x;
+};
+var haxe_xml__$Access_AttribAccess = {};
+haxe_xml__$Access_AttribAccess.resolve = function(this1,name) {
+	if(this1.nodeType == Xml.Document) {
+		throw haxe_Exception.thrown("Cannot access document attribute " + name);
+	}
+	var v = this1.get(name);
+	if(v == null) {
+		if(this1.nodeType != Xml.Element) {
+			throw haxe_Exception.thrown("Bad node type, expected Element but found " + (this1.nodeType == null ? "null" : XmlType.toString(this1.nodeType)));
+		}
+		throw haxe_Exception.thrown(this1.nodeName + " is missing attribute " + name);
+	}
+	return v;
+};
+var haxe_xml__$Access_HasAttribAccess = {};
+haxe_xml__$Access_HasAttribAccess.resolve = function(this1,name) {
+	if(this1.nodeType == Xml.Document) {
+		throw haxe_Exception.thrown("Cannot access document attribute " + name);
+	}
+	return this1.exists(name);
+};
+var haxe_xml__$Access_HasNodeAccess = {};
+haxe_xml__$Access_HasNodeAccess.resolve = function(this1,name) {
+	return this1.elementsNamed(name).hasNext();
+};
+var haxe_xml__$Access_NodeListAccess = {};
+haxe_xml__$Access_NodeListAccess.resolve = function(this1,name) {
+	var l = [];
+	var x = this1.elementsNamed(name);
+	while(x.hasNext()) {
+		var x1 = x.next();
+		if(x1.nodeType != Xml.Document && x1.nodeType != Xml.Element) {
+			throw haxe_Exception.thrown("Invalid nodeType " + (x1.nodeType == null ? "null" : XmlType.toString(x1.nodeType)));
+		}
+		l.push(x1);
+	}
+	return l;
+};
+var haxe_xml_Access = {};
+haxe_xml_Access.__properties__ = {get_innerHTML:"get_innerHTML",get_innerData:"get_innerData"};
+haxe_xml_Access.get_innerData = function(this1) {
+	if(this1.nodeType != Xml.Document && this1.nodeType != Xml.Element) {
+		throw haxe_Exception.thrown("Bad node type, expected Element or Document but found " + (this1.nodeType == null ? "null" : XmlType.toString(this1.nodeType)));
+	}
+	var it_current = 0;
+	var it_array = this1.children;
+	if(it_current >= it_array.length) {
+		var tmp;
+		if(this1.nodeType == Xml.Document) {
+			tmp = "Document";
+		} else {
+			if(this1.nodeType != Xml.Element) {
+				throw haxe_Exception.thrown("Bad node type, expected Element but found " + (this1.nodeType == null ? "null" : XmlType.toString(this1.nodeType)));
+			}
+			tmp = this1.nodeName;
+		}
+		throw haxe_Exception.thrown(tmp + " does not have data");
+	}
+	var v = it_array[it_current++];
+	if(it_current < it_array.length) {
+		var n = it_array[it_current++];
+		var tmp;
+		if(v.nodeType == Xml.PCData && n.nodeType == Xml.CData) {
+			if(v.nodeType == Xml.Document || v.nodeType == Xml.Element) {
+				throw haxe_Exception.thrown("Bad node type, unexpected " + (v.nodeType == null ? "null" : XmlType.toString(v.nodeType)));
+			}
+			tmp = StringTools.trim(v.nodeValue) == "";
+		} else {
+			tmp = false;
+		}
+		if(tmp) {
+			if(it_current >= it_array.length) {
+				if(n.nodeType == Xml.Document || n.nodeType == Xml.Element) {
+					throw haxe_Exception.thrown("Bad node type, unexpected " + (n.nodeType == null ? "null" : XmlType.toString(n.nodeType)));
+				}
+				return n.nodeValue;
+			}
+			var n2 = it_array[it_current++];
+			var tmp;
+			if(n2.nodeType == Xml.PCData) {
+				if(n2.nodeType == Xml.Document || n2.nodeType == Xml.Element) {
+					throw haxe_Exception.thrown("Bad node type, unexpected " + (n2.nodeType == null ? "null" : XmlType.toString(n2.nodeType)));
+				}
+				tmp = StringTools.trim(n2.nodeValue) == "";
+			} else {
+				tmp = false;
+			}
+			if(tmp && it_current >= it_array.length) {
+				if(n.nodeType == Xml.Document || n.nodeType == Xml.Element) {
+					throw haxe_Exception.thrown("Bad node type, unexpected " + (n.nodeType == null ? "null" : XmlType.toString(n.nodeType)));
+				}
+				return n.nodeValue;
+			}
+		}
+		var tmp;
+		if(this1.nodeType == Xml.Document) {
+			tmp = "Document";
+		} else {
+			if(this1.nodeType != Xml.Element) {
+				throw haxe_Exception.thrown("Bad node type, expected Element but found " + (this1.nodeType == null ? "null" : XmlType.toString(this1.nodeType)));
+			}
+			tmp = this1.nodeName;
+		}
+		throw haxe_Exception.thrown(tmp + " does not only have data");
+	}
+	if(v.nodeType != Xml.PCData && v.nodeType != Xml.CData) {
+		var tmp;
+		if(this1.nodeType == Xml.Document) {
+			tmp = "Document";
+		} else {
+			if(this1.nodeType != Xml.Element) {
+				throw haxe_Exception.thrown("Bad node type, expected Element but found " + (this1.nodeType == null ? "null" : XmlType.toString(this1.nodeType)));
+			}
+			tmp = this1.nodeName;
+		}
+		throw haxe_Exception.thrown(tmp + " does not have data");
+	}
+	if(v.nodeType == Xml.Document || v.nodeType == Xml.Element) {
+		throw haxe_Exception.thrown("Bad node type, unexpected " + (v.nodeType == null ? "null" : XmlType.toString(v.nodeType)));
+	}
+	return v.nodeValue;
+};
+haxe_xml_Access.get_innerHTML = function(this1) {
+	var s_b = "";
+	if(this1.nodeType != Xml.Document && this1.nodeType != Xml.Element) {
+		throw haxe_Exception.thrown("Bad node type, expected Element or Document but found " + (this1.nodeType == null ? "null" : XmlType.toString(this1.nodeType)));
+	}
+	var _g_current = 0;
+	var _g_array = this1.children;
+	while(_g_current < _g_array.length) {
+		var x = _g_array[_g_current++];
+		s_b += Std.string(haxe_xml_Printer.print(x));
+	}
+	return s_b;
+};
+var haxe_xml_Printer = function(pretty) {
+	this.output = new StringBuf();
+	this.pretty = pretty;
+};
+haxe_xml_Printer.__name__ = "haxe.xml.Printer";
+haxe_xml_Printer.print = function(xml,pretty) {
+	if(pretty == null) {
+		pretty = false;
+	}
+	var printer = new haxe_xml_Printer(pretty);
+	printer.writeNode(xml,"");
+	return printer.output.b;
+};
+haxe_xml_Printer.prototype = {
+	writeNode: function(value,tabs) {
+		switch(value.nodeType) {
+		case 0:
+			this.output.b += Std.string(tabs + "<");
+			if(value.nodeType != Xml.Element) {
+				throw haxe_Exception.thrown("Bad node type, expected Element but found " + (value.nodeType == null ? "null" : XmlType.toString(value.nodeType)));
+			}
+			this.output.b += Std.string(value.nodeName);
+			var attribute = value.attributes();
+			while(attribute.hasNext()) {
+				var attribute1 = attribute.next();
+				this.output.b += Std.string(" " + attribute1 + "=\"");
+				var input = StringTools.htmlEscape(value.get(attribute1),true);
+				this.output.b += Std.string(input);
+				this.output.b += "\"";
+			}
+			if(this.hasChildren(value)) {
+				this.output.b += ">";
+				if(this.pretty) {
+					this.output.b += "\n";
+				}
+				if(value.nodeType != Xml.Document && value.nodeType != Xml.Element) {
+					throw haxe_Exception.thrown("Bad node type, expected Element or Document but found " + (value.nodeType == null ? "null" : XmlType.toString(value.nodeType)));
+				}
+				var _g_current = 0;
+				var _g_array = value.children;
+				while(_g_current < _g_array.length) {
+					var child = _g_array[_g_current++];
+					this.writeNode(child,this.pretty ? tabs + "\t" : tabs);
+				}
+				this.output.b += Std.string(tabs + "</");
+				if(value.nodeType != Xml.Element) {
+					throw haxe_Exception.thrown("Bad node type, expected Element but found " + (value.nodeType == null ? "null" : XmlType.toString(value.nodeType)));
+				}
+				this.output.b += Std.string(value.nodeName);
+				this.output.b += ">";
+				if(this.pretty) {
+					this.output.b += "\n";
+				}
+			} else {
+				this.output.b += "/>";
+				if(this.pretty) {
+					this.output.b += "\n";
+				}
+			}
+			break;
+		case 1:
+			if(value.nodeType == Xml.Document || value.nodeType == Xml.Element) {
+				throw haxe_Exception.thrown("Bad node type, unexpected " + (value.nodeType == null ? "null" : XmlType.toString(value.nodeType)));
+			}
+			var nodeValue = value.nodeValue;
+			if(nodeValue.length != 0) {
+				var input = tabs + StringTools.htmlEscape(nodeValue);
+				this.output.b += Std.string(input);
+				if(this.pretty) {
+					this.output.b += "\n";
+				}
+			}
+			break;
+		case 2:
+			this.output.b += Std.string(tabs + "<![CDATA[");
+			if(value.nodeType == Xml.Document || value.nodeType == Xml.Element) {
+				throw haxe_Exception.thrown("Bad node type, unexpected " + (value.nodeType == null ? "null" : XmlType.toString(value.nodeType)));
+			}
+			this.output.b += Std.string(value.nodeValue);
+			this.output.b += "]]>";
+			if(this.pretty) {
+				this.output.b += "\n";
+			}
+			break;
+		case 3:
+			if(value.nodeType == Xml.Document || value.nodeType == Xml.Element) {
+				throw haxe_Exception.thrown("Bad node type, unexpected " + (value.nodeType == null ? "null" : XmlType.toString(value.nodeType)));
+			}
+			var commentContent = value.nodeValue;
+			var _this_r = new RegExp("[\n\r\t]+","g".split("u").join(""));
+			commentContent = commentContent.replace(_this_r,"");
+			commentContent = "<!--" + commentContent + "-->";
+			this.output.b += tabs == null ? "null" : "" + tabs;
+			var input = StringTools.trim(commentContent);
+			this.output.b += Std.string(input);
+			if(this.pretty) {
+				this.output.b += "\n";
+			}
+			break;
+		case 4:
+			if(value.nodeType == Xml.Document || value.nodeType == Xml.Element) {
+				throw haxe_Exception.thrown("Bad node type, unexpected " + (value.nodeType == null ? "null" : XmlType.toString(value.nodeType)));
+			}
+			this.output.b += Std.string("<!DOCTYPE " + value.nodeValue + ">");
+			if(this.pretty) {
+				this.output.b += "\n";
+			}
+			break;
+		case 5:
+			if(value.nodeType == Xml.Document || value.nodeType == Xml.Element) {
+				throw haxe_Exception.thrown("Bad node type, unexpected " + (value.nodeType == null ? "null" : XmlType.toString(value.nodeType)));
+			}
+			this.output.b += Std.string("<?" + value.nodeValue + "?>");
+			if(this.pretty) {
+				this.output.b += "\n";
+			}
+			break;
+		case 6:
+			if(value.nodeType != Xml.Document && value.nodeType != Xml.Element) {
+				throw haxe_Exception.thrown("Bad node type, expected Element or Document but found " + (value.nodeType == null ? "null" : XmlType.toString(value.nodeType)));
+			}
+			var _g_current = 0;
+			var _g_array = value.children;
+			while(_g_current < _g_array.length) {
+				var child = _g_array[_g_current++];
+				this.writeNode(child,tabs);
+			}
+			break;
+		}
+	}
+	,hasChildren: function(value) {
+		if(value.nodeType != Xml.Document && value.nodeType != Xml.Element) {
+			throw haxe_Exception.thrown("Bad node type, expected Element or Document but found " + (value.nodeType == null ? "null" : XmlType.toString(value.nodeType)));
+		}
+		var _g_current = 0;
+		var _g_array = value.children;
+		while(_g_current < _g_array.length) {
+			var child = _g_array[_g_current++];
+			switch(child.nodeType) {
+			case 0:case 1:
+				return true;
+			case 2:case 3:
+				if(child.nodeType == Xml.Document || child.nodeType == Xml.Element) {
+					throw haxe_Exception.thrown("Bad node type, unexpected " + (child.nodeType == null ? "null" : XmlType.toString(child.nodeType)));
+				}
+				if(StringTools.ltrim(child.nodeValue).length != 0) {
+					return true;
+				}
+				break;
+			default:
+			}
+		}
+		return false;
+	}
+	,__class__: haxe_xml_Printer
+};
+var hscript_TType = $hxEnums["hscript.TType"] = { __ename__:true,__constructs__:null
+	,TMono: ($_=function(r) { return {_hx_index:0,r:r,__enum__:"hscript.TType",toString:$estr}; },$_._hx_name="TMono",$_.__params__ = ["r"],$_)
+	,TVoid: {_hx_name:"TVoid",_hx_index:1,__enum__:"hscript.TType",toString:$estr}
+	,TInt: {_hx_name:"TInt",_hx_index:2,__enum__:"hscript.TType",toString:$estr}
+	,TFloat: {_hx_name:"TFloat",_hx_index:3,__enum__:"hscript.TType",toString:$estr}
+	,TBool: {_hx_name:"TBool",_hx_index:4,__enum__:"hscript.TType",toString:$estr}
+	,TDynamic: {_hx_name:"TDynamic",_hx_index:5,__enum__:"hscript.TType",toString:$estr}
+	,TParam: ($_=function(name) { return {_hx_index:6,name:name,__enum__:"hscript.TType",toString:$estr}; },$_._hx_name="TParam",$_.__params__ = ["name"],$_)
+	,TUnresolved: ($_=function(name) { return {_hx_index:7,name:name,__enum__:"hscript.TType",toString:$estr}; },$_._hx_name="TUnresolved",$_.__params__ = ["name"],$_)
+	,TNull: ($_=function(t) { return {_hx_index:8,t:t,__enum__:"hscript.TType",toString:$estr}; },$_._hx_name="TNull",$_.__params__ = ["t"],$_)
+	,TInst: ($_=function(c,args) { return {_hx_index:9,c:c,args:args,__enum__:"hscript.TType",toString:$estr}; },$_._hx_name="TInst",$_.__params__ = ["c","args"],$_)
+	,TEnum: ($_=function(e,args) { return {_hx_index:10,e:e,args:args,__enum__:"hscript.TType",toString:$estr}; },$_._hx_name="TEnum",$_.__params__ = ["e","args"],$_)
+	,TType: ($_=function(t,args) { return {_hx_index:11,t:t,args:args,__enum__:"hscript.TType",toString:$estr}; },$_._hx_name="TType",$_.__params__ = ["t","args"],$_)
+	,TAbstract: ($_=function(a,args) { return {_hx_index:12,a:a,args:args,__enum__:"hscript.TType",toString:$estr}; },$_._hx_name="TAbstract",$_.__params__ = ["a","args"],$_)
+	,TFun: ($_=function(args,ret) { return {_hx_index:13,args:args,ret:ret,__enum__:"hscript.TType",toString:$estr}; },$_._hx_name="TFun",$_.__params__ = ["args","ret"],$_)
+	,TAnon: ($_=function(fields) { return {_hx_index:14,fields:fields,__enum__:"hscript.TType",toString:$estr}; },$_._hx_name="TAnon",$_.__params__ = ["fields"],$_)
+	,TLazy: ($_=function(f) { return {_hx_index:15,f:f,__enum__:"hscript.TType",toString:$estr}; },$_._hx_name="TLazy",$_.__params__ = ["f"],$_)
+};
+hscript_TType.__constructs__ = [hscript_TType.TMono,hscript_TType.TVoid,hscript_TType.TInt,hscript_TType.TFloat,hscript_TType.TBool,hscript_TType.TDynamic,hscript_TType.TParam,hscript_TType.TUnresolved,hscript_TType.TNull,hscript_TType.TInst,hscript_TType.TEnum,hscript_TType.TType,hscript_TType.TAbstract,hscript_TType.TFun,hscript_TType.TAnon,hscript_TType.TLazy];
+var hscript__$Checker_WithType = $hxEnums["hscript._Checker.WithType"] = { __ename__:true,__constructs__:null
+	,NoValue: {_hx_name:"NoValue",_hx_index:0,__enum__:"hscript._Checker.WithType",toString:$estr}
+	,Value: {_hx_name:"Value",_hx_index:1,__enum__:"hscript._Checker.WithType",toString:$estr}
+	,WithType: ($_=function(t) { return {_hx_index:2,t:t,__enum__:"hscript._Checker.WithType",toString:$estr}; },$_._hx_name="WithType",$_.__params__ = ["t"],$_)
+};
+hscript__$Checker_WithType.__constructs__ = [hscript__$Checker_WithType.NoValue,hscript__$Checker_WithType.Value,hscript__$Checker_WithType.WithType];
+var hscript_CTypedecl = $hxEnums["hscript.CTypedecl"] = { __ename__:true,__constructs__:null
+	,CTClass: ($_=function(c) { return {_hx_index:0,c:c,__enum__:"hscript.CTypedecl",toString:$estr}; },$_._hx_name="CTClass",$_.__params__ = ["c"],$_)
+	,CTEnum: ($_=function(e) { return {_hx_index:1,e:e,__enum__:"hscript.CTypedecl",toString:$estr}; },$_._hx_name="CTEnum",$_.__params__ = ["e"],$_)
+	,CTTypedef: ($_=function(t) { return {_hx_index:2,t:t,__enum__:"hscript.CTypedecl",toString:$estr}; },$_._hx_name="CTTypedef",$_.__params__ = ["t"],$_)
+	,CTAlias: ($_=function(t) { return {_hx_index:3,t:t,__enum__:"hscript.CTypedecl",toString:$estr}; },$_._hx_name="CTAlias",$_.__params__ = ["t"],$_)
+	,CTAbstract: ($_=function(a) { return {_hx_index:4,a:a,__enum__:"hscript.CTypedecl",toString:$estr}; },$_._hx_name="CTAbstract",$_.__params__ = ["a"],$_)
+};
+hscript_CTypedecl.__constructs__ = [hscript_CTypedecl.CTClass,hscript_CTypedecl.CTEnum,hscript_CTypedecl.CTTypedef,hscript_CTypedecl.CTAlias,hscript_CTypedecl.CTAbstract];
+var hscript_Completion = function(expr,t) {
+	this.expr = expr;
+	this.t = t;
+};
+hscript_Completion.__name__ = "hscript.Completion";
+hscript_Completion.prototype = {
+	__class__: hscript_Completion
+};
+var hscript_CheckerTypes = function() {
+	this.types = new haxe_ds_StringMap();
+	this.types = new haxe_ds_StringMap();
+	this.types.h["Void"] = hscript_CTypedecl.CTAlias(hscript_TType.TVoid);
+	this.types.h["Int"] = hscript_CTypedecl.CTAlias(hscript_TType.TInt);
+	this.types.h["Float"] = hscript_CTypedecl.CTAlias(hscript_TType.TFloat);
+	this.types.h["Bool"] = hscript_CTypedecl.CTAlias(hscript_TType.TBool);
+	this.types.h["Dynamic"] = hscript_CTypedecl.CTAlias(hscript_TType.TDynamic);
+	this.parser = new hscript_Parser();
+};
+hscript_CheckerTypes.__name__ = "hscript.CheckerTypes";
+hscript_CheckerTypes.prototype = {
+	addXmlApi: function(api) {
+		var types = new haxe_rtti_XmlParser();
+		types.process(api,"");
+		var todo = [];
+		var _g = 0;
+		var _g1 = types.root;
+		while(_g < _g1.length) {
+			var v = _g1[_g];
+			++_g;
+			this.addXmlType(v,todo);
+		}
+		var _g = 0;
+		while(_g < todo.length) {
+			var f = todo[_g];
+			++_g;
+			f();
+		}
+		this.t_string = this.getType("String");
+	}
+	,defineClass: function(name,ct) {
+		if(ct == null) {
+			ct = { name : name, fields : new haxe_ds_StringMap(), statics : new haxe_ds_StringMap(), params : []};
+		}
+		this.types.h[name] = hscript_CTypedecl.CTClass(ct);
+		return ct;
+	}
+	,addXmlType: function(x,todo) {
+		var _gthis = this;
+		switch(x._hx_index) {
+		case 0:
+			var name = x.name;
+			var full = x.full;
+			var subs = x.subs;
+			var _g = 0;
+			while(_g < subs.length) {
+				var s = subs[_g];
+				++_g;
+				this.addXmlType(s,todo);
+			}
+			break;
+		case 1:
+			var c = x.c;
+			if(Object.prototype.hasOwnProperty.call(this.types.h,c.path)) {
+				return;
+			}
+			var cl = { name : c.path, params : [], fields : new haxe_ds_StringMap(), statics : new haxe_ds_StringMap()};
+			this.addMeta(c,cl);
+			if(c.isInterface) {
+				cl.isInterface = true;
+			}
+			var _g = 0;
+			var _g1 = c.params;
+			while(_g < _g1.length) {
+				var p = _g1[_g];
+				++_g;
+				cl.params.push(hscript_TType.TParam(p));
+			}
+			todo.push(function() {
+				var _g = new haxe_ds_StringMap();
+				var _g1 = 0;
+				var _g2 = cl.params;
+				while(_g1 < _g2.length) {
+					var t = _g2[_g1];
+					++_g1;
+					var key = c.path + "." + hscript_Checker.typeStr(t);
+					_g.h[key] = t;
+				}
+				_gthis.localParams = _g;
+				if(c.superClass != null) {
+					var _gthis1 = _gthis;
+					var c1 = c.superClass.path;
+					var _g = [];
+					var _g1 = 0;
+					var _g2 = c.superClass.params;
+					while(_g1 < _g2.length) {
+						var t = _g2[_g1];
+						++_g1;
+						_g.push(_gthis.makeXmlType(t));
+					}
+					cl.superClass = _gthis1.getType(c1,_g);
+				}
+				if(c.interfaces != null) {
+					cl.interfaces = [];
+					var _g = 0;
+					var _g1 = c.interfaces;
+					while(_g < _g1.length) {
+						var i = _g1[_g];
+						++_g;
+						var cl1 = cl.interfaces;
+						var _gthis1 = _gthis;
+						var i1 = i.path;
+						var _g2 = [];
+						var _g3 = 0;
+						var _g4 = i.params;
+						while(_g3 < _g4.length) {
+							var t = _g4[_g3];
+							++_g3;
+							_g2.push(_gthis.makeXmlType(t));
+						}
+						cl1.push(_gthis1.getType(i1,_g2));
+					}
+				}
+				var pkeys = [];
+				var initField = function(f,fields) {
+					if(f.isOverride || HxOverrides.substr(f.name,0,4) == "get_" || HxOverrides.substr(f.name,0,4) == "set_") {
+						return;
+					}
+					var complete = !StringTools.startsWith(f.name,"__");
+					var _g = 0;
+					var _g1 = f.meta;
+					while(_g < _g1.length) {
+						var m = _g1[_g];
+						++_g;
+						if(m.name == ":noScript") {
+							return;
+						}
+						if(m.name == ":noCompletion") {
+							complete = false;
+						}
+					}
+					var _g = f.set;
+					var fl;
+					switch(_g._hx_index) {
+					case 2:
+						var _g1 = _g.m;
+						fl = true;
+						break;
+					case 0:case 4:
+						fl = true;
+						break;
+					default:
+						fl = false;
+					}
+					var fl1 = { isPublic : f.isPublic, canWrite : fl, complete : complete, params : [], name : f.name, t : null};
+					var _g = 0;
+					var _g1 = f.params;
+					while(_g < _g1.length) {
+						var p = _g1[_g];
+						++_g;
+						var pt = hscript_TType.TParam(p);
+						var key = f.name + "." + p;
+						pkeys.push(key);
+						fl1.params.push(pt);
+						_gthis.localParams.h[key] = pt;
+					}
+					fl1.t = _gthis.makeXmlType(f.type);
+					if(f.meta != null && f.meta.length > 0) {
+						fl1.meta = [];
+						var _g = 0;
+						var _g1 = f.meta;
+						while(_g < _g1.length) {
+							var m = _g1[_g];
+							++_g;
+							var fl = fl1.meta;
+							var m1 = m.name;
+							var _g2 = [];
+							var _g3 = 0;
+							var _g4 = m.params;
+							while(_g3 < _g4.length) {
+								var p = _g4[_g3];
+								++_g3;
+								var initField;
+								try {
+									initField = _gthis.parser.parseString(p);
+								} catch( _g5 ) {
+									if(((haxe_Exception.caught(_g5).unwrap()) instanceof hscript_Error)) {
+										initField = null;
+									} else {
+										throw _g5;
+									}
+								}
+								_g2.push(initField);
+							}
+							fl.push({ name : m1, params : _g2});
+						}
+					}
+					while(pkeys.length > 0) {
+						var this1 = _gthis.localParams;
+						var key = pkeys.pop();
+						var _this = this1;
+						if(Object.prototype.hasOwnProperty.call(_this.h,key)) {
+							delete(_this.h[key]);
+						}
+					}
+					if(fl1.name == "new") {
+						cl.constructor = fl1;
+					} else {
+						fields.set(f.name,fl1);
+					}
+				};
+				var _g = 0;
+				var _g1 = c.fields;
+				while(_g < _g1.length) {
+					var f = _g1[_g];
+					++_g;
+					initField(f,cl.fields);
+				}
+				var _g = 0;
+				var _g1 = c.statics;
+				while(_g < _g1.length) {
+					var f = _g1[_g];
+					++_g;
+					initField(f,cl.statics);
+				}
+				_gthis.localParams = null;
+			});
+			this.types.h[cl.name] = hscript_CTypedecl.CTClass(cl);
+			break;
+		case 2:
+			var e = x.e;
+			if(Object.prototype.hasOwnProperty.call(this.types.h,e.path)) {
+				return;
+			}
+			var en = { name : e.path, params : [], constructors : []};
+			this.addMeta(e,en);
+			var _g = 0;
+			var _g1 = e.params;
+			while(_g < _g1.length) {
+				var p = _g1[_g];
+				++_g;
+				en.params.push(hscript_TType.TParam(p));
+			}
+			todo.push(function() {
+				var _g = new haxe_ds_StringMap();
+				var _g1 = 0;
+				var _g2 = en.params;
+				while(_g1 < _g2.length) {
+					var t = _g2[_g1];
+					++_g1;
+					var key = e.path + "." + hscript_Checker.typeStr(t);
+					_g.h[key] = t;
+				}
+				_gthis.localParams = _g;
+				var _g = 0;
+				var _g1 = e.constructors;
+				while(_g < _g1.length) {
+					var c = _g1[_g];
+					++_g;
+					var en1 = en.constructors;
+					var c1 = c.name;
+					var tmp;
+					if(c.args == null) {
+						tmp = null;
+					} else {
+						var _g2 = [];
+						var _g3 = 0;
+						var _g4 = c.args;
+						while(_g3 < _g4.length) {
+							var a = _g4[_g3];
+							++_g3;
+							_g2.push({ name : a.name, opt : a.opt, t : _gthis.makeXmlType(a.t)});
+						}
+						tmp = _g2;
+					}
+					en1.push({ name : c1, args : tmp});
+				}
+				_gthis.localParams = null;
+			});
+			this.types.h[en.name] = hscript_CTypedecl.CTEnum(en);
+			break;
+		case 3:
+			var t = x.t;
+			if(Object.prototype.hasOwnProperty.call(this.types.h,t.path)) {
+				return;
+			}
+			var td = { name : t.path, params : [], t : null};
+			var _g = 0;
+			var _g1 = t.params;
+			while(_g < _g1.length) {
+				var p = _g1[_g];
+				++_g;
+				td.params.push(hscript_TType.TParam(p));
+			}
+			if(t.path == "hscript.TypeCheck") {
+				td.params.reverse();
+			}
+			todo.push(function() {
+				var _g = new haxe_ds_StringMap();
+				var _g1 = 0;
+				var _g2 = td.params;
+				while(_g1 < _g2.length) {
+					var pt = _g2[_g1];
+					++_g1;
+					var key = t.path + "." + hscript_Checker.typeStr(pt);
+					_g.h[key] = pt;
+				}
+				_gthis.localParams = _g;
+				td.t = _gthis.makeXmlType(t.type);
+				_gthis.localParams = null;
+			});
+			this.types.h[t.path] = hscript_CTypedecl.CTTypedef(td);
+			break;
+		case 4:
+			var a = x.a;
+			if(Object.prototype.hasOwnProperty.call(this.types.h,a.path)) {
+				return;
+			}
+			var ta = { name : a.path, params : [], t : null};
+			this.addMeta(a,ta);
+			var _g = 0;
+			var _g1 = a.params;
+			while(_g < _g1.length) {
+				var p = _g1[_g];
+				++_g;
+				ta.params.push(hscript_TType.TParam(p));
+			}
+			todo.push(function() {
+				var _g = new haxe_ds_StringMap();
+				var _g1 = 0;
+				var _g2 = ta.params;
+				while(_g1 < _g2.length) {
+					var t = _g2[_g1];
+					++_g1;
+					var key = a.path + "." + hscript_Checker.typeStr(t);
+					_g.h[key] = t;
+				}
+				_gthis.localParams = _g;
+				ta.t = _gthis.makeXmlType(a.athis);
+				_gthis.localParams = null;
+			});
+			this.types.h[a.path] = hscript_CTypedecl.CTAbstract(ta);
+			break;
+		}
+	}
+	,addMeta: function(src,to) {
+		if(src.meta == null || src.meta.length == 0) {
+			return;
+		}
+		to.meta = [];
+		var _g = 0;
+		var _g1 = src.meta;
+		while(_g < _g1.length) {
+			var m = _g1[_g];
+			++_g;
+			var to1 = to.meta;
+			var m1 = m.name;
+			var _g2 = [];
+			var _g3 = 0;
+			var _g4 = m.params;
+			while(_g3 < _g4.length) {
+				var p = _g4[_g3];
+				++_g3;
+				var tmp;
+				try {
+					tmp = this.parser.parseString(p);
+				} catch( _g5 ) {
+					if(((haxe_Exception.caught(_g5).unwrap()) instanceof hscript_Error)) {
+						tmp = null;
+					} else {
+						throw _g5;
+					}
+				}
+				_g2.push(tmp);
+			}
+			to1.push({ name : m1, params : _g2});
+		}
+	}
+	,makeXmlType: function(t) {
+		switch(t._hx_index) {
+		case 0:
+			return hscript_TType.TUnresolved("Unknown");
+		case 1:
+			var name = t.name;
+			var params = t.params;
+			var _g = [];
+			var _g1 = 0;
+			while(_g1 < params.length) {
+				var t1 = params[_g1];
+				++_g1;
+				_g.push(this.makeXmlType(t1));
+			}
+			return this.getType(name,_g);
+		case 2:
+			var name = t.name;
+			var params = t.params;
+			var _g = [];
+			var _g1 = 0;
+			while(_g1 < params.length) {
+				var t1 = params[_g1];
+				++_g1;
+				_g.push(this.makeXmlType(t1));
+			}
+			return this.getType(name,_g);
+		case 3:
+			var name = t.name;
+			var params = t.params;
+			var _g = [];
+			var _g1 = 0;
+			while(_g1 < params.length) {
+				var t1 = params[_g1];
+				++_g1;
+				_g.push(this.makeXmlType(t1));
+			}
+			return this.getType(name,_g);
+		case 4:
+			var args = t.args;
+			var ret = t.ret;
+			var _g = [];
+			var _g1 = 0;
+			while(_g1 < args.length) {
+				var a = args[_g1];
+				++_g1;
+				_g.push({ name : a.name, opt : a.opt, t : this.makeXmlType(a.t)});
+			}
+			return hscript_TType.TFun(_g,this.makeXmlType(ret));
+		case 5:
+			var fields = t.fields;
+			var _g = [];
+			var _g1 = 0;
+			while(_g1 < fields.length) {
+				var f = fields[_g1];
+				++_g1;
+				var f1 = f.name;
+				var tmp = this.makeXmlType(f.type);
+				var m = f.meta;
+				var tmp1;
+				if(m == null) {
+					tmp1 = false;
+				} else {
+					var b = false;
+					var _g2 = 0;
+					while(_g2 < m.length) {
+						var m1 = m[_g2];
+						++_g2;
+						if(m1.name == ":optional") {
+							b = true;
+							break;
+						}
+					}
+					tmp1 = b;
+				}
+				_g.push({ name : f1, t : tmp, opt : tmp1});
+			}
+			return hscript_TType.TAnon(_g);
+		case 6:
+			var t1 = t.t;
+			return hscript_TType.TDynamic;
+		case 7:
+			var name = t.name;
+			var params = t.params;
+			var _g = [];
+			var _g1 = 0;
+			while(_g1 < params.length) {
+				var t = params[_g1];
+				++_g1;
+				_g.push(this.makeXmlType(t));
+			}
+			return this.getType(name,_g);
+		}
+	}
+	,getType: function(name,args) {
+		if(this.localParams != null) {
+			var t = this.localParams.h[name];
+			if(t != null) {
+				return t;
+			}
+		}
+		var t = this.resolve(name,args);
+		if(t == null) {
+			var pack = name.split(".");
+			if(pack.length > 1) {
+				var priv = pack[pack.length - 2];
+				if(HxOverrides.cca(priv,0) == 95) {
+					HxOverrides.remove(pack,priv);
+					return this.getType(pack.join("."),args);
+				}
+			}
+			return hscript_TType.TUnresolved(name);
+		}
+		return t;
+	}
+	,resolve: function(name,args) {
+		if(name == "Null") {
+			if(args == null || args.length != 1) {
+				throw haxe_Exception.thrown("Missing Null<T> parameter");
+			}
+			return hscript_TType.TNull(args[0]);
+		}
+		var t = this.types.h[name];
+		if(t == null) {
+			return null;
+		}
+		if(args == null) {
+			args = [];
+		}
+		switch(t._hx_index) {
+		case 0:
+			var c = t.c;
+			return hscript_TType.TInst(c,args);
+		case 1:
+			var e = t.e;
+			return hscript_TType.TEnum(e,args);
+		case 2:
+			var t1 = t.t;
+			return hscript_TType.TType(t1,args);
+		case 3:
+			var t1 = t.t;
+			return t1;
+		case 4:
+			var a = t.a;
+			return hscript_TType.TAbstract(a,args);
+		}
+	}
+	,__class__: hscript_CheckerTypes
+};
+var hscript_Checker = function(types) {
+	this.events = new haxe_ds_StringMap();
+	this.globals = new haxe_ds_StringMap();
+	if(types == null) {
+		types = new hscript_CheckerTypes();
+	}
+	this.types = types;
+};
+hscript_Checker.__name__ = "hscript.Checker";
+hscript_Checker.typeStr = function(t) {
+	switch(t._hx_index) {
+	case 0:
+		var r = t.r;
+		if(r.r == null) {
+			return "Unknown";
+		} else {
+			return hscript_Checker.typeStr(r.r);
+		}
+		break;
+	case 6:
+		var name = t.name;
+		return name;
+	case 7:
+		var name = t.name;
+		return "?" + name;
+	case 8:
+		var t1 = t.t;
+		return "Null<" + hscript_Checker.typeStr(t1) + ">";
+	case 9:
+		var c = t.c;
+		var args = t.args;
+		var c1 = c.name;
+		var tmp;
+		if(args.length == 0) {
+			tmp = "";
+		} else {
+			var _g = [];
+			var _g1 = 0;
+			while(_g1 < args.length) {
+				var t1 = args[_g1];
+				++_g1;
+				_g.push(hscript_Checker.typeStr(t1));
+			}
+			tmp = "<" + _g.join(",") + ">";
+		}
+		return c1 + tmp;
+	case 10:
+		var e = t.e;
+		var args = t.args;
+		var e1 = e.name;
+		var tmp;
+		if(args.length == 0) {
+			tmp = "";
+		} else {
+			var _g = [];
+			var _g1 = 0;
+			while(_g1 < args.length) {
+				var t1 = args[_g1];
+				++_g1;
+				_g.push(hscript_Checker.typeStr(t1));
+			}
+			tmp = "<" + _g.join(",") + ">";
+		}
+		return e1 + tmp;
+	case 11:
+		var t1 = t.t;
+		var args = t.args;
+		if(t1.name == "hscript.TypeCheck") {
+			return hscript_Checker.typeStr(args[1]);
+		} else {
+			var t2 = t1.name;
+			var tmp;
+			if(args.length == 0) {
+				tmp = "";
+			} else {
+				var _g = [];
+				var _g1 = 0;
+				while(_g1 < args.length) {
+					var t1 = args[_g1];
+					++_g1;
+					_g.push(hscript_Checker.typeStr(t1));
+				}
+				tmp = "<" + _g.join(",") + ">";
+			}
+			return t2 + tmp;
+		}
+		break;
+	case 12:
+		var a = t.a;
+		var args = t.args;
+		var a1 = a.name;
+		var tmp;
+		if(args.length == 0) {
+			tmp = "";
+		} else {
+			var _g = [];
+			var _g1 = 0;
+			while(_g1 < args.length) {
+				var t1 = args[_g1];
+				++_g1;
+				_g.push(hscript_Checker.typeStr(t1));
+			}
+			tmp = "<" + _g.join(",") + ">";
+		}
+		return a1 + tmp;
+	case 13:
+		var args = t.args;
+		var ret = t.ret;
+		var _g = [];
+		var _g1 = 0;
+		while(_g1 < args.length) {
+			var a = args[_g1];
+			++_g1;
+			_g.push((a.opt ? "?" : "") + (a.name == "" ? "" : a.name + ":") + hscript_Checker.typeStr(a.t));
+		}
+		return "(" + _g.join(", ") + ") -> " + hscript_Checker.typeStr(ret);
+	case 14:
+		var fields = t.fields;
+		var _g = [];
+		var _g1 = 0;
+		while(_g1 < fields.length) {
+			var f = fields[_g1];
+			++_g1;
+			_g.push((f.opt ? "?" : "") + f.name + ":" + hscript_Checker.typeStr(f.t));
+		}
+		return "{" + _g.join(", ") + "}";
+	default:
+		return HxOverrides.substr($hxEnums[t.__enum__].__constructs__[t._hx_index]._hx_name,1,null);
+	}
+};
+hscript_Checker.typeIter = function(t,callb) {
+	switch(t._hx_index) {
+	case 0:
+		var r = t.r;
+		if(r.r != null) {
+			callb(r.r);
+		}
+		break;
+	case 8:
+		var t1 = t.t;
+		callb(t1);
+		break;
+	case 9:
+		var _g = t.c;
+		var tl = t.args;
+		var _g = 0;
+		while(_g < tl.length) {
+			var t1 = tl[_g];
+			++_g;
+			callb(t1);
+		}
+		break;
+	case 10:
+		var _g = t.e;
+		var tl = t.args;
+		var _g = 0;
+		while(_g < tl.length) {
+			var t1 = tl[_g];
+			++_g;
+			callb(t1);
+		}
+		break;
+	case 11:
+		var _g = t.t;
+		var tl = t.args;
+		var _g = 0;
+		while(_g < tl.length) {
+			var t1 = tl[_g];
+			++_g;
+			callb(t1);
+		}
+		break;
+	case 12:
+		var _g = t.a;
+		var tl = t.args;
+		var _g = 0;
+		while(_g < tl.length) {
+			var t1 = tl[_g];
+			++_g;
+			callb(t1);
+		}
+		break;
+	case 13:
+		var args = t.args;
+		var ret = t.ret;
+		var _g = 0;
+		while(_g < args.length) {
+			var t1 = args[_g];
+			++_g;
+			callb(t1.t);
+		}
+		callb(ret);
+		break;
+	case 14:
+		var fl = t.fields;
+		var _g = 0;
+		while(_g < fl.length) {
+			var f = fl[_g];
+			++_g;
+			callb(f.t);
+		}
+		break;
+	case 15:
+		var f = t.f;
+		callb(f());
+		break;
+	default:
+	}
+};
+hscript_Checker.prototype = {
+	setGlobals: function(cl,allowPrivate) {
+		if(allowPrivate == null) {
+			allowPrivate = false;
+		}
+		var _gthis = this;
+		while(true) {
+			var h = cl.fields.h;
+			var f_h = h;
+			var f_keys = Object.keys(h);
+			var f_length = f_keys.length;
+			var f_current = 0;
+			while(f_current < f_length) {
+				var f = [f_h[f_keys[f_current++]]];
+				if(f[0].isPublic || allowPrivate) {
+					this.setGlobal(f[0].name,f[0].params.length == 0 ? f[0].t : hscript_TType.TLazy((function(f) {
+						return function() {
+							var _gthis1 = _gthis;
+							var f1 = f[0].t;
+							var f2 = f[0].params;
+							var _g = [];
+							var _g1 = 0;
+							var _g2 = f[0].params.length;
+							while(_g1 < _g2) {
+								var i = _g1++;
+								_g.push(_gthis.makeMono());
+							}
+							return _gthis1.apply(f1,f2,_g);
+						};
+					})(f)));
+				}
+			}
+			if(cl.superClass == null) {
+				break;
+			}
+			var _g = cl.superClass;
+			if(_g == null) {
+				throw haxe_Exception.thrown("assert");
+			} else if(_g._hx_index == 9) {
+				var _g1 = _g.args;
+				var c = _g.c;
+				cl = c;
+			} else {
+				throw haxe_Exception.thrown("assert");
+			}
+		}
+	}
+	,removeGlobal: function(name) {
+		var _this = this.globals;
+		if(Object.prototype.hasOwnProperty.call(_this.h,name)) {
+			delete(_this.h[name]);
+		}
+	}
+	,setGlobal: function(name,type) {
+		this.globals.h[name] = type;
+	}
+	,setEvent: function(name,type) {
+		this.events.h[name] = type;
+	}
+	,getGlobals: function() {
+		return this.globals;
+	}
+	,onTopDownEnum: function(en,field) {
+		return false;
+	}
+	,typeArgs: function(args,pos) {
+		var _g = [];
+		var _g1 = 0;
+		var _g2 = args.length;
+		while(_g1 < _g2) {
+			var i = _g1++;
+			var a = args[i];
+			var at = a.t == null ? this.makeMono() : this.makeType(a.t,pos);
+			_g.push({ name : a.name, opt : a.opt, t : at});
+		}
+		return _g;
+	}
+	,check: function(expr,withType,isCompletion) {
+		if(isCompletion == null) {
+			isCompletion = false;
+		}
+		var _gthis = this;
+		if(withType == null) {
+			withType = hscript__$Checker_WithType.NoValue;
+		}
+		this.locals = new haxe_ds_StringMap();
+		if(this.types.t_string == null) {
+			this.types.t_string = this.types.getType("String");
+		}
+		this.allowDefine = this.allowGlobalsDefine;
+		this.isCompletion = isCompletion;
+		var _g = expr.e;
+		var tmp;
+		if(_g._hx_index == 14) {
+			var _g1 = _g.args;
+			var _g1 = _g.e;
+			var _g1 = _g.name;
+			var _g1 = _g.ret;
+			tmp = true;
+		} else {
+			tmp = false;
+		}
+		if(tmp) {
+			expr = this.mk(hscript_ExprDef.EBlock([expr]),expr);
+		}
+		var _g = expr.e;
+		if(_g._hx_index == 4) {
+			var el = _g.e;
+			var delayed = [];
+			var last = hscript_TType.TVoid;
+			var _g = 0;
+			while(_g < el.length) {
+				var e = [el[_g]];
+				++_g;
+				while(true) {
+					var _g1 = e[0].e;
+					if(_g1._hx_index == 25) {
+						var _g2 = _g1.name;
+						var _g3 = _g1.args;
+						var e2 = _g1.e;
+						e[0] = e2;
+					} else {
+						break;
+					}
+				}
+				var _g4 = e[0].e;
+				if(_g4._hx_index == 14) {
+					var _g5 = _g4.e;
+					var args = _g4.args;
+					var name = _g4.name;
+					var ret = _g4.ret;
+					if(name != null) {
+						var tret = ret == null ? this.makeMono() : this.makeType(ret,e[0]);
+						var ft = [hscript_TType.TFun(this.typeArgs(args,e[0]),tret)];
+						this.locals.h[name] = ft[0];
+						delayed.push((function(ft,e) {
+							return function() {
+								_gthis.currentFunType = ft[0];
+								_gthis.typeExpr(e[0],hscript__$Checker_WithType.NoValue);
+								return ft[0];
+							};
+						})(ft,e));
+					} else {
+						var _g6 = 0;
+						while(_g6 < delayed.length) {
+							var f = delayed[_g6];
+							++_g6;
+							f();
+						}
+						delayed = [];
+						if(el[el.length - 1] == e[0]) {
+							last = this.typeExpr(e[0],withType);
+						} else {
+							this.typeExpr(e[0],hscript__$Checker_WithType.NoValue);
+						}
+					}
+				} else {
+					var _g7 = 0;
+					while(_g7 < delayed.length) {
+						var f1 = delayed[_g7];
+						++_g7;
+						f1();
+					}
+					delayed = [];
+					if(el[el.length - 1] == e[0]) {
+						last = this.typeExpr(e[0],withType);
+					} else {
+						this.typeExpr(e[0],hscript__$Checker_WithType.NoValue);
+					}
+				}
+			}
+			var _g = 0;
+			while(_g < delayed.length) {
+				var f = delayed[_g];
+				++_g;
+				last = f();
+			}
+			return last;
+		}
+		return this.typeExpr(expr,withType);
+	}
+	,edef: function(e) {
+		return e.e;
+	}
+	,error: function(msg,curExpr) {
+		var e = hscript_ErrorDef.ECustom(msg);
+		var e1 = new hscript_Error(e,curExpr.pmin,curExpr.pmax,curExpr.origin,curExpr.line);
+		if(!this.isCompletion) {
+			throw haxe_Exception.thrown(e1);
+		}
+	}
+	,saveLocals: function() {
+		var _g = new haxe_ds_StringMap();
+		var h = this.locals.h;
+		var k_h = h;
+		var k_keys = Object.keys(h);
+		var k_length = k_keys.length;
+		var k_current = 0;
+		while(k_current < k_length) {
+			var k = k_keys[k_current++];
+			_g.h[k] = this.locals.h[k];
+		}
+		return _g;
+	}
+	,makeType: function(t,e) {
+		switch(t._hx_index) {
+		case 0:
+			var path = t.path;
+			var params = t.params;
+			var ct = this.types;
+			var ct1 = path.join(".");
+			var ct2;
+			if(params == null) {
+				ct2 = [];
+			} else {
+				var _g = [];
+				var _g1 = 0;
+				while(_g1 < params.length) {
+					var p = params[_g1];
+					++_g1;
+					_g.push(this.makeType(p,e));
+				}
+				ct2 = _g;
+			}
+			var ct3 = ct.resolve(ct1,ct2);
+			if(ct3 == null) {
+				var e1 = hscript_ErrorDef.ECustom("Unknown type " + Std.string(path));
+				var e2 = new hscript_Error(e1,e.pmin,e.pmax,e.origin,e.line);
+				if(!this.isCompletion) {
+					throw haxe_Exception.thrown(e2);
+				}
+				ct3 = hscript_TType.TDynamic;
+			}
+			return ct3;
+		case 1:
+			var args = t.args;
+			var ret = t.ret;
+			var i = 0;
+			var _g = [];
+			var _g1 = 0;
+			while(_g1 < args.length) {
+				var a = args[_g1];
+				++_g1;
+				_g.push({ name : "p" + i++, opt : false, t : this.makeType(a,e)});
+			}
+			return hscript_TType.TFun(_g,this.makeType(ret,e));
+		case 2:
+			var fields = t.fields;
+			var _g = [];
+			var _g1 = 0;
+			while(_g1 < fields.length) {
+				var f = fields[_g1];
+				++_g1;
+				_g.push({ name : f.name, opt : false, t : this.makeType(f.t,e)});
+			}
+			return hscript_TType.TAnon(_g);
+		case 3:
+			var t1 = t.t;
+			return this.makeType(t1,e);
+		case 4:
+			var t1 = t.t;
+			return this.makeType(t1,e);
+		case 5:
+			var n = t.n;
+			var t1 = t.t;
+			return this.makeType(t1,e);
+		}
+	}
+	,linkLoop: function(a,t) {
+		if(t == a) {
+			return true;
+		}
+		switch(t._hx_index) {
+		case 0:
+			var r = t.r;
+			if(r.r == null) {
+				return false;
+			}
+			return this.linkLoop(a,r.r);
+		case 5:
+			if(t == hscript_TType.TDynamic) {
+				return false;
+			}
+			return this.linkLoop(a,hscript_TType.TDynamic);
+		case 9:
+			var _g = t.c;
+			var tl = t.args;
+			var _g = 0;
+			while(_g < tl.length) {
+				var t1 = tl[_g];
+				++_g;
+				if(this.linkLoop(a,t1)) {
+					return true;
+				}
+			}
+			return false;
+		case 10:
+			var _g = t.e;
+			var tl = t.args;
+			var _g = 0;
+			while(_g < tl.length) {
+				var t1 = tl[_g];
+				++_g;
+				if(this.linkLoop(a,t1)) {
+					return true;
+				}
+			}
+			return false;
+		case 11:
+			var _g = t.t;
+			var tl = t.args;
+			var _g = 0;
+			while(_g < tl.length) {
+				var t1 = tl[_g];
+				++_g;
+				if(this.linkLoop(a,t1)) {
+					return true;
+				}
+			}
+			return false;
+		case 12:
+			var _g = t.a;
+			var tl = t.args;
+			var _g = 0;
+			while(_g < tl.length) {
+				var t1 = tl[_g];
+				++_g;
+				if(this.linkLoop(a,t1)) {
+					return true;
+				}
+			}
+			return false;
+		case 13:
+			var args = t.args;
+			var ret = t.ret;
+			var _g = 0;
+			while(_g < args.length) {
+				var arg = args[_g];
+				++_g;
+				if(this.linkLoop(a,arg.t)) {
+					return true;
+				}
+			}
+			return this.linkLoop(a,ret);
+		case 14:
+			var fl = t.fields;
+			var _g = 0;
+			while(_g < fl.length) {
+				var f = fl[_g];
+				++_g;
+				if(this.linkLoop(a,f.t)) {
+					return true;
+				}
+			}
+			return false;
+		default:
+			return false;
+		}
+	}
+	,link: function(a,b,r) {
+		if(this.linkLoop(a,b)) {
+			return this.follow(b) == a;
+		}
+		if(b == hscript_TType.TDynamic) {
+			return true;
+		}
+		r.r = b;
+		return true;
+	}
+	,typeEq: function(t1,t2) {
+		if(t1 == t2) {
+			return true;
+		}
+		switch(t1._hx_index) {
+		case 0:
+			var r = t1.r;
+			if(r.r == null) {
+				if(!this.link(t1,t2,r)) {
+					return false;
+				}
+				r.r = t2;
+				return true;
+			}
+			return this.typeEq(r.r,t2);
+		case 8:
+			var _g = t1.t;
+			switch(t2._hx_index) {
+			case 0:
+				var r = t2.r;
+				if(r.r == null) {
+					if(!this.link(t2,t1,r)) {
+						return false;
+					}
+					r.r = t1;
+					return true;
+				}
+				return this.typeEq(t1,r.r);
+			case 8:
+				var t21 = t2.t;
+				var t11 = _g;
+				return this.typeEq(t11,t21);
+			case 11:
+				var t21 = t2.t;
+				var pl2 = t2.args;
+				return this.typeEq(t1,this.apply(t21.t,t21.params,pl2));
+			default:
+				var t11 = _g;
+				return this.typeEq(t11,t2);
+			}
+			break;
+		case 9:
+			var _g = t1.c;
+			var _g1 = t1.args;
+			switch(t2._hx_index) {
+			case 0:
+				var r = t2.r;
+				if(r.r == null) {
+					if(!this.link(t2,t1,r)) {
+						return false;
+					}
+					r.r = t1;
+					return true;
+				}
+				return this.typeEq(t1,r.r);
+			case 8:
+				var t21 = t2.t;
+				return this.typeEq(t1,t21);
+			case 9:
+				var cl2 = t2.c;
+				var pl2 = t2.args;
+				var pl1 = _g1;
+				var cl1 = _g;
+				if(cl1 == cl2) {
+					var _g = 0;
+					var _g1 = pl1.length;
+					while(_g < _g1) {
+						var i = _g++;
+						if(!this.typeEq(pl1[i],pl2[i])) {
+							return false;
+						}
+					}
+					return true;
+				}
+				break;
+			case 11:
+				var t21 = t2.t;
+				var pl2 = t2.args;
+				return this.typeEq(t1,this.apply(t21.t,t21.params,pl2));
+			default:
+			}
+			break;
+		case 10:
+			var _g = t1.e;
+			var _g1 = t1.args;
+			switch(t2._hx_index) {
+			case 0:
+				var r = t2.r;
+				if(r.r == null) {
+					if(!this.link(t2,t1,r)) {
+						return false;
+					}
+					r.r = t1;
+					return true;
+				}
+				return this.typeEq(t1,r.r);
+			case 8:
+				var t21 = t2.t;
+				return this.typeEq(t1,t21);
+			case 10:
+				var e2 = t2.e;
+				var pl2 = t2.args;
+				var pl1 = _g1;
+				var e1 = _g;
+				if(e1 == e2) {
+					var _g = 0;
+					var _g1 = pl1.length;
+					while(_g < _g1) {
+						var i = _g++;
+						if(!this.typeEq(pl1[i],pl2[i])) {
+							return false;
+						}
+					}
+					return true;
+				}
+				break;
+			case 11:
+				var t21 = t2.t;
+				var pl2 = t2.args;
+				return this.typeEq(t1,this.apply(t21.t,t21.params,pl2));
+			default:
+			}
+			break;
+		case 11:
+			var _g = t1.t;
+			var _g1 = t1.args;
+			switch(t2._hx_index) {
+			case 0:
+				var r = t2.r;
+				if(r.r == null) {
+					if(!this.link(t2,t1,r)) {
+						return false;
+					}
+					r.r = t1;
+					return true;
+				}
+				return this.typeEq(t1,r.r);
+			case 8:
+				var _g2 = t2.t;
+				var pl1 = _g1;
+				var t11 = _g;
+				return this.typeEq(this.apply(t11.t,t11.params,pl1),t2);
+			case 11:
+				var t21 = t2.t;
+				var pl2 = t2.args;
+				var pl1 = _g1;
+				var t11 = _g;
+				if(t11 == t21) {
+					var _g2 = 0;
+					var _g3 = pl1.length;
+					while(_g2 < _g3) {
+						var i = _g2++;
+						if(!this.typeEq(pl1[i],pl2[i])) {
+							return false;
+						}
+					}
+					return true;
+				} else {
+					var pl1 = _g1;
+					var t11 = _g;
+					return this.typeEq(this.apply(t11.t,t11.params,pl1),t2);
+				}
+				break;
+			default:
+				var pl1 = _g1;
+				var t11 = _g;
+				return this.typeEq(this.apply(t11.t,t11.params,pl1),t2);
+			}
+			break;
+		case 12:
+			var _g = t1.a;
+			var _g1 = t1.args;
+			switch(t2._hx_index) {
+			case 0:
+				var r = t2.r;
+				if(r.r == null) {
+					if(!this.link(t2,t1,r)) {
+						return false;
+					}
+					r.r = t1;
+					return true;
+				}
+				return this.typeEq(t1,r.r);
+			case 8:
+				var t21 = t2.t;
+				return this.typeEq(t1,t21);
+			case 11:
+				var t21 = t2.t;
+				var pl2 = t2.args;
+				return this.typeEq(t1,this.apply(t21.t,t21.params,pl2));
+			case 12:
+				var a2 = t2.a;
+				var pl2 = t2.args;
+				var pl1 = _g1;
+				var a1 = _g;
+				if(a1 == a2) {
+					var _g = 0;
+					var _g1 = pl1.length;
+					while(_g < _g1) {
+						var i = _g++;
+						if(!this.typeEq(pl1[i],pl2[i])) {
+							return false;
+						}
+					}
+					return true;
+				}
+				break;
+			default:
+			}
+			break;
+		case 13:
+			var _g = t1.args;
+			var _g1 = t1.ret;
+			switch(t2._hx_index) {
+			case 0:
+				var r = t2.r;
+				if(r.r == null) {
+					if(!this.link(t2,t1,r)) {
+						return false;
+					}
+					r.r = t1;
+					return true;
+				}
+				return this.typeEq(t1,r.r);
+			case 8:
+				var t21 = t2.t;
+				return this.typeEq(t1,t21);
+			case 11:
+				var t21 = t2.t;
+				var pl2 = t2.args;
+				return this.typeEq(t1,this.apply(t21.t,t21.params,pl2));
+			case 13:
+				var args2 = t2.args;
+				var r2 = t2.ret;
+				var r1 = _g1;
+				var args1 = _g;
+				if(args1.length == args2.length) {
+					var _g = 0;
+					var _g1 = args1.length;
+					while(_g < _g1) {
+						var i = _g++;
+						if(!this.typeEq(args1[i].t,args2[i].t)) {
+							return false;
+						}
+					}
+					return this.typeEq(r1,r2);
+				}
+				break;
+			default:
+			}
+			break;
+		case 14:
+			var _g = t1.fields;
+			switch(t2._hx_index) {
+			case 0:
+				var r = t2.r;
+				if(r.r == null) {
+					if(!this.link(t2,t1,r)) {
+						return false;
+					}
+					r.r = t1;
+					return true;
+				}
+				return this.typeEq(t1,r.r);
+			case 8:
+				var t21 = t2.t;
+				return this.typeEq(t1,t21);
+			case 11:
+				var t21 = t2.t;
+				var pl2 = t2.args;
+				return this.typeEq(t1,this.apply(t21.t,t21.params,pl2));
+			case 14:
+				var a2 = t2.fields;
+				var a1 = _g;
+				if(a1.length == a2.length) {
+					var m_h = Object.create(null);
+					var _g = 0;
+					while(_g < a2.length) {
+						var f = a2[_g];
+						++_g;
+						m_h[f.name] = f;
+					}
+					var _g = 0;
+					while(_g < a1.length) {
+						var f1 = a1[_g];
+						++_g;
+						var f2 = m_h[f1.name];
+						if(f2 == null) {
+							return false;
+						}
+						if(!this.typeEq(f1.t,f2.t)) {
+							return false;
+						}
+					}
+					return true;
+				}
+				break;
+			default:
+			}
+			break;
+		default:
+			switch(t2._hx_index) {
+			case 0:
+				var r = t2.r;
+				if(r.r == null) {
+					if(!this.link(t2,t1,r)) {
+						return false;
+					}
+					r.r = t1;
+					return true;
+				}
+				return this.typeEq(t1,r.r);
+			case 8:
+				var t21 = t2.t;
+				return this.typeEq(t1,t21);
+			case 11:
+				var t21 = t2.t;
+				var pl2 = t2.args;
+				return this.typeEq(t1,this.apply(t21.t,t21.params,pl2));
+			default:
+			}
+		}
+		return false;
+	}
+	,tryUnify: function(t1,t2) {
+		if(t1 == t2) {
+			return true;
+		}
+		switch(t1._hx_index) {
+		case 0:
+			var r = t1.r;
+			if(r.r == null) {
+				if(!this.link(t1,t2,r)) {
+					return false;
+				}
+				r.r = t2;
+				return true;
+			}
+			return this.tryUnify(r.r,t2);
+		case 2:
+			switch(t2._hx_index) {
+			case 0:
+				var r = t2.r;
+				if(r.r == null) {
+					if(!this.link(t2,t1,r)) {
+						return false;
+					}
+					r.r = t1;
+					return true;
+				}
+				return this.tryUnify(t1,r.r);
+			case 3:
+				return true;
+			case 5:
+				return true;
+			case 8:
+				var t21 = t2.t;
+				return this.tryUnify(t1,t21);
+			case 11:
+				var t21 = t2.t;
+				var pl2 = t2.args;
+				return this.tryUnify(t1,this.apply(t21.t,t21.params,pl2));
+			default:
+			}
+			break;
+		case 5:
+			switch(t2._hx_index) {
+			case 0:
+				var r = t2.r;
+				if(r.r == null) {
+					if(!this.link(t2,t1,r)) {
+						return false;
+					}
+					r.r = t1;
+					return true;
+				}
+				return this.tryUnify(t1,r.r);
+			case 5:
+				return true;
+			case 8:
+				var t21 = t2.t;
+				return this.tryUnify(t1,t21);
+			case 11:
+				var t21 = t2.t;
+				var pl2 = t2.args;
+				return this.tryUnify(t1,this.apply(t21.t,t21.params,pl2));
+			default:
+				return true;
+			}
+			break;
+		case 8:
+			var _g = t1.t;
+			switch(t2._hx_index) {
+			case 0:
+				var r = t2.r;
+				if(r.r == null) {
+					if(!this.link(t2,t1,r)) {
+						return false;
+					}
+					r.r = t1;
+					return true;
+				}
+				return this.tryUnify(t1,r.r);
+			case 5:
+				var t11 = _g;
+				return this.tryUnify(t11,t2);
+			case 8:
+				var _g1 = t2.t;
+				var t11 = _g;
+				return this.tryUnify(t11,t2);
+			case 11:
+				var t21 = t2.t;
+				var pl2 = t2.args;
+				return this.tryUnify(t1,this.apply(t21.t,t21.params,pl2));
+			default:
+				var t11 = _g;
+				return this.tryUnify(t11,t2);
+			}
+			break;
+		case 9:
+			var _g = t1.c;
+			var _g1 = t1.args;
+			switch(t2._hx_index) {
+			case 0:
+				var r = t2.r;
+				if(r.r == null) {
+					if(!this.link(t2,t1,r)) {
+						return false;
+					}
+					r.r = t1;
+					return true;
+				}
+				return this.tryUnify(t1,r.r);
+			case 5:
+				return true;
+			case 8:
+				var t21 = t2.t;
+				return this.tryUnify(t1,t21);
+			case 9:
+				var cl2 = t2.c;
+				var pl2 = t2.args;
+				var pl1 = _g1;
+				var cl1 = _g;
+				while(cl1 != cl2) {
+					if(cl1.interfaces != null) {
+						var _g2 = 0;
+						var _g3 = cl1.interfaces;
+						while(_g2 < _g3.length) {
+							var i = _g3[_g2];
+							++_g2;
+							if(i._hx_index == 9) {
+								var cli = i.c;
+								var args = i.args;
+								var _g4 = [];
+								var _g5 = 0;
+								while(_g5 < args.length) {
+									var a = args[_g5];
+									++_g5;
+									_g4.push(this.apply(a,cl1.params,pl1));
+								}
+								var i1 = hscript_TType.TInst(cli,_g4);
+								if(this.tryUnify(i1,t2)) {
+									return true;
+								}
+							} else {
+								throw haxe_Exception.thrown("assert");
+							}
+						}
+					}
+					var _g6 = cl1.superClass;
+					if(_g6 == null) {
+						return false;
+					} else if(_g6._hx_index == 9) {
+						var c = _g6.c;
+						var args1 = _g6.args;
+						var _g7 = [];
+						var _g8 = 0;
+						while(_g8 < args1.length) {
+							var a1 = args1[_g8];
+							++_g8;
+							_g7.push(this.apply(a1,cl1.params,pl1));
+						}
+						pl1 = _g7;
+						cl1 = c;
+					} else {
+						throw haxe_Exception.thrown("assert");
+					}
+				}
+				var _g2 = 0;
+				var _g3 = pl1.length;
+				while(_g2 < _g3) {
+					var i = _g2++;
+					if(!this.typeEq(pl1[i],pl2[i])) {
+						return false;
+					}
+				}
+				return true;
+			case 11:
+				var t21 = t2.t;
+				var pl2 = t2.args;
+				return this.tryUnify(t1,this.apply(t21.t,t21.params,pl2));
+			case 14:
+				var fl = t2.fields;
+				var pl1 = _g1;
+				var cl1 = _g;
+				var _g = 0;
+				var _g1 = fl.length;
+				while(_g < _g1) {
+					var i = _g++;
+					var f2 = fl[i];
+					var f1 = null;
+					var cl = cl1;
+					while(true) {
+						f1 = cl.fields.h[f2.name];
+						if(f1 != null) {
+							break;
+						}
+						if(cl.superClass == null) {
+							return false;
+						}
+						var _g2 = cl.superClass;
+						if(_g2 == null) {
+							throw haxe_Exception.thrown("assert");
+						} else if(_g2._hx_index == 9) {
+							var _g3 = _g2.args;
+							var c = _g2.c;
+							cl = c;
+						} else {
+							throw haxe_Exception.thrown("assert");
+						}
+					}
+					if(!this.typeEq(this.apply(f1.t,cl1.params,pl1),f2.t)) {
+						return false;
+					}
+				}
+				return true;
+			default:
+			}
+			break;
+		case 11:
+			var _g = t1.t;
+			var _g1 = t1.args;
+			switch(t2._hx_index) {
+			case 0:
+				var r = t2.r;
+				if(r.r == null) {
+					if(!this.link(t2,t1,r)) {
+						return false;
+					}
+					r.r = t1;
+					return true;
+				}
+				return this.tryUnify(t1,r.r);
+			case 5:
+				var pl1 = _g1;
+				var t11 = _g;
+				return this.tryUnify(this.apply(t11.t,t11.params,pl1),t2);
+			case 8:
+				var _g2 = t2.t;
+				var pl1 = _g1;
+				var t11 = _g;
+				return this.tryUnify(this.apply(t11.t,t11.params,pl1),t2);
+			case 11:
+				var _g2 = t2.t;
+				var _g2 = t2.args;
+				var pl1 = _g1;
+				var t11 = _g;
+				return this.tryUnify(this.apply(t11.t,t11.params,pl1),t2);
+			default:
+				var pl1 = _g1;
+				var t11 = _g;
+				return this.tryUnify(this.apply(t11.t,t11.params,pl1),t2);
+			}
+			break;
+		case 13:
+			var _g = t1.args;
+			var _g1 = t1.ret;
+			switch(t2._hx_index) {
+			case 0:
+				var r = t2.r;
+				if(r.r == null) {
+					if(!this.link(t2,t1,r)) {
+						return false;
+					}
+					r.r = t1;
+					return true;
+				}
+				return this.tryUnify(t1,r.r);
+			case 5:
+				return true;
+			case 8:
+				var t21 = t2.t;
+				return this.tryUnify(t1,t21);
+			case 11:
+				var t21 = t2.t;
+				var pl2 = t2.args;
+				return this.tryUnify(t1,this.apply(t21.t,t21.params,pl2));
+			case 12:
+				var _g2 = t2.a;
+				var _g3 = t2.args;
+				var _g3 = _g2.meta;
+				var _g3 = _g2.params;
+				var _g3 = _g2.t;
+				if(_g2.name == "haxe.Function") {
+					return true;
+				}
+				break;
+			case 13:
+				var args2 = t2.args;
+				var r2 = t2.ret;
+				var r1 = _g1;
+				var args1 = _g;
+				if(args1.length == args2.length) {
+					var _g = 0;
+					var _g1 = args1.length;
+					while(_g < _g1) {
+						var i = _g++;
+						var a1 = args1[i];
+						var a2 = args2[i];
+						if(a2.opt && !a1.opt) {
+							return false;
+						}
+						if(!this.tryUnify(a2.t,a1.t)) {
+							return false;
+						}
+					}
+					return this.tryUnify(r1,r2);
+				}
+				break;
+			default:
+			}
+			break;
+		case 14:
+			var _g = t1.fields;
+			switch(t2._hx_index) {
+			case 0:
+				var r = t2.r;
+				if(r.r == null) {
+					if(!this.link(t2,t1,r)) {
+						return false;
+					}
+					r.r = t1;
+					return true;
+				}
+				return this.tryUnify(t1,r.r);
+			case 5:
+				return true;
+			case 8:
+				var t21 = t2.t;
+				return this.tryUnify(t1,t21);
+			case 11:
+				var t21 = t2.t;
+				var pl2 = t2.args;
+				return this.tryUnify(t1,this.apply(t21.t,t21.params,pl2));
+			case 14:
+				var a2 = t2.fields;
+				var a1 = _g;
+				if(a2.length == 0) {
+					return true;
+				}
+				var m_h = Object.create(null);
+				var _g = 0;
+				while(_g < a1.length) {
+					var f = a1[_g];
+					++_g;
+					m_h[f.name] = f;
+				}
+				var _g = 0;
+				while(_g < a2.length) {
+					var f2 = a2[_g];
+					++_g;
+					var f1 = m_h[f2.name];
+					if(f1 == null) {
+						if(f2.opt) {
+							continue;
+						}
+						return false;
+					}
+					if(!this.typeEq(f1.t,f2.t)) {
+						return false;
+					}
+				}
+				return true;
+			default:
+			}
+			break;
+		default:
+			switch(t2._hx_index) {
+			case 0:
+				var r = t2.r;
+				if(r.r == null) {
+					if(!this.link(t2,t1,r)) {
+						return false;
+					}
+					r.r = t1;
+					return true;
+				}
+				return this.tryUnify(t1,r.r);
+			case 5:
+				return true;
+			case 8:
+				var t21 = t2.t;
+				return this.tryUnify(t1,t21);
+			case 11:
+				var t21 = t2.t;
+				var pl2 = t2.args;
+				return this.tryUnify(t1,this.apply(t21.t,t21.params,pl2));
+			default:
+			}
+		}
+		return this.typeEq(t1,t2);
+	}
+	,unify: function(t1,t2,e) {
+		if(!this.tryUnify(t1,t2)) {
+			var e1 = hscript_ErrorDef.ECustom(hscript_Checker.typeStr(t1) + " should be " + hscript_Checker.typeStr(t2));
+			var e2 = new hscript_Error(e1,e.pmin,e.pmax,e.origin,e.line);
+			if(!this.isCompletion) {
+				throw haxe_Exception.thrown(e2);
+			}
+		}
+	}
+	,apply: function(t,params,args) {
+		var _gthis = this;
+		if(args.length != params.length) {
+			throw haxe_Exception.thrown("Invalid number of type parameters");
+		}
+		if(args.length == 0) {
+			return t;
+		}
+		var subst = new haxe_ds_EnumValueMap();
+		var _g = 0;
+		var _g1 = params.length;
+		while(_g < _g1) {
+			var i = _g++;
+			subst.set(params[i],args[i]);
+		}
+		var map = null;
+		map = function(t) {
+			var st = subst.get(t);
+			if(st != null) {
+				return st;
+			}
+			return _gthis.mapType(t,map);
+		};
+		return map(t);
+	}
+	,mapType: function(t,f) {
+		switch(t._hx_index) {
+		case 0:
+			var r = t.r;
+			if(r.r == null) {
+				return t;
+			}
+			return f(t);
+		case 1:case 2:case 3:case 4:case 5:
+			return t;
+		case 6:
+			var _g = t.name;
+			return t;
+		case 7:
+			var _g = t.name;
+			return t;
+		case 8:
+			var t1 = t.t;
+			return hscript_TType.TNull(f(t1));
+		case 9:
+			var _g = t.args;
+			if(_g.length == 0) {
+				return t;
+			} else {
+				var args = _g;
+				var c = t.c;
+				var _g = [];
+				var _g1 = 0;
+				while(_g1 < args.length) {
+					var t1 = args[_g1];
+					++_g1;
+					_g.push(f(t1));
+				}
+				return hscript_TType.TInst(c,_g);
+			}
+			break;
+		case 10:
+			var _g = t.args;
+			if(_g.length == 0) {
+				return t;
+			} else {
+				var args = _g;
+				var e = t.e;
+				var _g = [];
+				var _g1 = 0;
+				while(_g1 < args.length) {
+					var t1 = args[_g1];
+					++_g1;
+					_g.push(f(t1));
+				}
+				return hscript_TType.TEnum(e,_g);
+			}
+			break;
+		case 11:
+			var _g = t.args;
+			if(_g.length == 0) {
+				return t;
+			} else {
+				var args = _g;
+				var t1 = t.t;
+				var _g = [];
+				var _g1 = 0;
+				while(_g1 < args.length) {
+					var t2 = args[_g1];
+					++_g1;
+					_g.push(f(t2));
+				}
+				return hscript_TType.TType(t1,_g);
+			}
+			break;
+		case 12:
+			var _g = t.args;
+			if(_g.length == 0) {
+				return t;
+			} else {
+				var args = _g;
+				var a = t.a;
+				var _g = [];
+				var _g1 = 0;
+				while(_g1 < args.length) {
+					var t1 = args[_g1];
+					++_g1;
+					_g.push(f(t1));
+				}
+				return hscript_TType.TAbstract(a,_g);
+			}
+			break;
+		case 13:
+			var args = t.args;
+			var ret = t.ret;
+			var _g = [];
+			var _g1 = 0;
+			while(_g1 < args.length) {
+				var a = args[_g1];
+				++_g1;
+				_g.push({ name : a.name, opt : a.opt, t : f(a.t)});
+			}
+			return hscript_TType.TFun(_g,f(ret));
+		case 14:
+			var fields = t.fields;
+			var _g = [];
+			var _g1 = 0;
+			while(_g1 < fields.length) {
+				var af = fields[_g1];
+				++_g1;
+				_g.push({ name : af.name, opt : af.opt, t : f(af.t)});
+			}
+			return hscript_TType.TAnon(_g);
+		case 15:
+			var l = t.f;
+			return f(l());
+		}
+	}
+	,follow: function(t) {
+		switch(t._hx_index) {
+		case 0:
+			var r = t.r;
+			if(r.r != null) {
+				return this.follow(r.r);
+			} else {
+				return t;
+			}
+			break;
+		case 8:
+			var t1 = t.t;
+			return this.follow(t1);
+		case 11:
+			var t1 = t.t;
+			var args = t.args;
+			return this.follow(this.apply(t1.t,t1.params,args));
+		case 15:
+			var f = t.f;
+			return this.follow(f());
+		default:
+			return t;
+		}
+	}
+	,getFields: function(t) {
+		var _gthis = this;
+		var fields = [];
+		var _g = this.follow(t);
+		switch(_g._hx_index) {
+		case 9:
+			var c = _g.c;
+			var args = _g.args;
+			var map = function(t) {
+				return _gthis.apply(t,c.params,args);
+			};
+			while(c != null) {
+				var h = c.fields.h;
+				var fname_h = h;
+				var fname_keys = Object.keys(h);
+				var fname_length = fname_keys.length;
+				var fname_current = 0;
+				while(fname_current < fname_length) {
+					var fname = fname_keys[fname_current++];
+					var f = c.fields.h[fname];
+					if(!f.isPublic || !f.complete) {
+						continue;
+					}
+					var name = f.name;
+					var t = map(f.t);
+					if(this.allowAsync && StringTools.startsWith(name,"a_")) {
+						t = this.unasync(t);
+						name = HxOverrides.substr(name,2,null);
+					}
+					fields.push({ name : name, t : t});
+				}
+				if(c.isInterface && c.interfaces != null) {
+					var _g1 = 0;
+					var _g2 = c.interfaces;
+					while(_g1 < _g2.length) {
+						var i = _g2[_g1];
+						++_g1;
+						var _g3 = 0;
+						var _g4 = this.getFields(i);
+						while(_g3 < _g4.length) {
+							var f1 = _g4[_g3];
+							++_g3;
+							fields.push({ name : f1.name, t : map(f1.t)});
+						}
+					}
+				}
+				if(c.superClass == null) {
+					break;
+				}
+				var _g5 = c.superClass;
+				if(_g5 == null) {
+					break;
+				} else if(_g5._hx_index == 9) {
+					var csup = [_g5.c];
+					var args1 = [_g5.args];
+					var curMap = [map];
+					map = (function(curMap,args,csup) {
+						return function(t) {
+							return curMap[0](_gthis.apply(t,csup[0].params,args[0]));
+						};
+					})(curMap,args1,csup);
+					c = csup[0];
+				} else {
+					break;
+				}
+			}
+			break;
+		case 13:
+			var args2 = _g.args;
+			var ret = _g.ret;
+			if(this.isCompletion) {
+				fields.push({ name : "bind", t : hscript_TType.TFun(args2,hscript_TType.TVoid)});
+			}
+			break;
+		case 14:
+			var fl = _g.fields;
+			var _g = 0;
+			while(_g < fl.length) {
+				var f = fl[_g];
+				++_g;
+				fields.push({ name : f.name, t : f.t});
+			}
+			break;
+		default:
+		}
+		return fields;
+	}
+	,getField: function(t,f,e,forWrite) {
+		if(forWrite == null) {
+			forWrite = false;
+		}
+		var _g = this.follow(t);
+		switch(_g._hx_index) {
+		case 5:
+			return this.makeMono();
+		case 9:
+			var c = _g.c;
+			var args = _g.args;
+			var cf = c.fields.h[f];
+			if(cf == null && this.allowAsync) {
+				cf = c.fields.h["a_" + f];
+				if(cf != null) {
+					var isPublic = true;
+					cf = { isPublic : isPublic, canWrite : false, params : cf.params, name : cf.name, t : this.unasync(cf.t), complete : cf.complete};
+					if(cf.t == null) {
+						cf = null;
+					}
+				}
+			}
+			if(cf == null && c.isInterface && c.interfaces != null) {
+				var _g1 = 0;
+				var _g2 = c.interfaces;
+				while(_g1 < _g2.length) {
+					var i = _g2[_g1];
+					++_g1;
+					var ft = this.getField(i,f,e,forWrite);
+					if(ft != null) {
+						return this.apply(ft,c.params,args);
+					}
+				}
+			}
+			if(cf == null) {
+				if(c.superClass == null) {
+					return null;
+				}
+				var ft = this.getField(c.superClass,f,e,forWrite);
+				if(ft != null) {
+					ft = this.apply(ft,c.params,args);
+				}
+				return ft;
+			}
+			if(!cf.isPublic) {
+				var e1 = hscript_ErrorDef.ECustom("Can't access private field " + f + " on " + c.name);
+				var e2 = new hscript_Error(e1,e.pmin,e.pmax,e.origin,e.line);
+				if(!this.isCompletion) {
+					throw haxe_Exception.thrown(e2);
+				}
+			}
+			if(forWrite && !cf.canWrite) {
+				var e1 = hscript_ErrorDef.ECustom("Can't write readonly field " + f + " on " + c.name);
+				var e2 = new hscript_Error(e1,e.pmin,e.pmax,e.origin,e.line);
+				if(!this.isCompletion) {
+					throw haxe_Exception.thrown(e2);
+				}
+			}
+			var t = cf.t;
+			if(cf.params != null) {
+				var cf1 = cf.params;
+				var _g1 = [];
+				var _g2 = 0;
+				var _g3 = cf.params.length;
+				while(_g2 < _g3) {
+					var i = _g2++;
+					_g1.push(this.makeMono());
+				}
+				t = this.apply(t,cf1,_g1);
+			}
+			return this.apply(t,c.params,args);
+		case 14:
+			var fields = _g.fields;
+			var _g = 0;
+			while(_g < fields.length) {
+				var af = fields[_g];
+				++_g;
+				if(af.name == f) {
+					return af.t;
+				}
+			}
+			return null;
+		default:
+			return null;
+		}
+	}
+	,unasync: function(t) {
+		var _g = this.follow(t);
+		if(_g._hx_index == 13) {
+			var args = _g.args;
+			var ret = _g.ret;
+			if(args.length > 0) {
+				var rargs = args.slice();
+				var _g = this.follow(rargs.shift().t);
+				if(_g._hx_index == 13) {
+					var _g1 = _g.args;
+					var _g2 = _g.ret;
+					if(_g1.length == 1) {
+						var r = _g1[0];
+						return hscript_TType.TFun(rargs,r.t);
+					}
+				}
+			}
+		}
+		return null;
+	}
+	,typeExprWith: function(expr,t) {
+		var et = this.typeExpr(expr,hscript__$Checker_WithType.WithType(t));
+		this.unify(et,t,expr);
+		return t;
+	}
+	,makeMono: function() {
+		return hscript_TType.TMono({ r : null});
+	}
+	,makeIterator: function(t) {
+		return hscript_TType.TAnon([{ name : "next", opt : false, t : hscript_TType.TFun([],t)},{ name : "hasNext", opt : false, t : hscript_TType.TFun([],hscript_TType.TBool)}]);
+	}
+	,mk: function(e,p) {
+		return { e : e, pmin : p.pmin, pmax : p.pmax, origin : p.origin, line : p.line};
+	}
+	,isString: function(t) {
+		t = this.follow(t);
+		if(t._hx_index == 9) {
+			var _g = t.c;
+			var _g1 = t.args;
+			var _g1 = _g.constructor;
+			var _g1 = _g.fields;
+			var _g1 = _g.interfaces;
+			var _g1 = _g.isInterface;
+			var _g1 = _g.meta;
+			var _g1 = _g.params;
+			var _g1 = _g.statics;
+			var _g1 = _g.superClass;
+			if(_g.name == "String") {
+				return true;
+			} else {
+				return false;
+			}
+		} else {
+			return false;
+		}
+	}
+	,onCompletion: function(expr,t) {
+		if(this.isCompletion) {
+			throw haxe_Exception.thrown(new hscript_Completion(expr,t));
+		}
+	}
+	,typeField: function(o,f,expr,forWrite) {
+		var ot = this.typeExpr(o,hscript__$Checker_WithType.Value);
+		if(f == null) {
+			this.onCompletion(expr,ot);
+		}
+		var ft = this.getField(ot,f,expr,forWrite);
+		if(ft == null) {
+			var e = hscript_ErrorDef.ECustom(hscript_Checker.typeStr(ot) + " has no field " + f);
+			var e1 = new hscript_Error(e,expr.pmin,expr.pmax,expr.origin,expr.line);
+			if(!this.isCompletion) {
+				throw haxe_Exception.thrown(e1);
+			}
+			ft = hscript_TType.TDynamic;
+		}
+		return ft;
+	}
+	,typeExpr: function(expr,withType) {
+		var _gthis = this;
+		if(expr == null && this.isCompletion) {
+			if(withType._hx_index == 2) {
+				var t = withType.t;
+				return t;
+			} else {
+				return hscript_TType.TDynamic;
+			}
+		}
+		var _g = expr.e;
+		switch(_g._hx_index) {
+		case 0:
+			var c = _g.c;
+			switch(c._hx_index) {
+			case 0:
+				var _g1 = c.v;
+				return hscript_TType.TInt;
+			case 1:
+				var _g1 = c.f;
+				return hscript_TType.TFloat;
+			case 2:
+				var _g1 = c.s;
+				return this.types.t_string;
+			}
+			break;
+		case 1:
+			var v = _g.v;
+			var l = this.locals.h[v];
+			if(l != null) {
+				return l;
+			}
+			var g = this.globals.h[v];
+			if(g != null) {
+				if(g == null) {
+					return g;
+				} else if(g._hx_index == 15) {
+					var f = g.f;
+					return f();
+				} else {
+					return g;
+				}
+			}
+			if(this.allowAsync) {
+				g = this.globals.h["a_" + v];
+				if(g != null) {
+					g = this.unasync(g);
+				}
+				if(g != null) {
+					return g;
+				}
+			}
+			switch(v) {
+			case "false":case "true":
+				return hscript_TType.TBool;
+			case "null":
+				return this.makeMono();
+			case "trace":
+				return hscript_TType.TDynamic;
+			default:
+				if(withType._hx_index == 2) {
+					var _g1 = withType.t;
+					if(_g1._hx_index == 10) {
+						var et = _g1;
+						var e = _g1.e;
+						var args = _g1.args;
+						var _g1 = 0;
+						var _g2 = e.constructors;
+						while(_g1 < _g2.length) {
+							var c = _g2[_g1];
+							++_g1;
+							if(c.name == v) {
+								if(this.onTopDownEnum(e,v)) {
+									var ct = c.args == null ? et : hscript_TType.TFun(c.args,et);
+									return this.apply(ct,e.params,args);
+								}
+								break;
+							}
+						}
+					}
+				}
+				if(this.isCompletion) {
+					return hscript_TType.TDynamic;
+				}
+				var e = hscript_ErrorDef.ECustom("Unknown identifier " + v);
+				var e1 = new hscript_Error(e,expr.pmin,expr.pmax,expr.origin,expr.line);
+				if(!this.isCompletion) {
+					throw haxe_Exception.thrown(e1);
+				}
+			}
+			break;
+		case 2:
+			var n = _g.n;
+			var t = _g.t;
+			var init = _g.e;
+			var vt = t == null ? this.makeMono() : this.makeType(t,expr);
+			if(init != null) {
+				var et = this.typeExpr(init,t == null ? hscript__$Checker_WithType.Value : hscript__$Checker_WithType.WithType(vt));
+				if(t == null) {
+					vt = et;
+				} else {
+					this.unify(et,vt,init);
+				}
+			}
+			this.locals.h[n] = vt;
+			return hscript_TType.TVoid;
+		case 3:
+			var e = _g.e;
+			return this.typeExpr(e,withType);
+		case 4:
+			var el = _g.e;
+			var t = hscript_TType.TVoid;
+			var locals = this.saveLocals();
+			var _g1 = 0;
+			while(_g1 < el.length) {
+				var e = el[_g1];
+				++_g1;
+				t = this.typeExpr(e,e == el[el.length - 1] ? withType : hscript__$Checker_WithType.NoValue);
+			}
+			this.locals = locals;
+			return t;
+		case 5:
+			var o = _g.e;
+			var f = _g.f;
+			return this.typeField(o,f,expr,false);
+		case 6:
+			var op = _g.op;
+			var e1 = _g.e1;
+			var e2 = _g.e2;
+			switch(op) {
+			case "!=":case "==":
+				var t1 = this.typeExpr(e1,hscript__$Checker_WithType.Value);
+				var t2 = this.typeExpr(e2,hscript__$Checker_WithType.WithType(t1));
+				if(!this.tryUnify(t1,t2)) {
+					this.unify(t2,t1,e2);
+				}
+				return hscript_TType.TBool;
+			case "%":case "*":case "-":case "/":
+				var t1 = this.typeExpr(e1,hscript__$Checker_WithType.WithType(hscript_TType.TInt));
+				var t2 = this.typeExpr(e2,hscript__$Checker_WithType.WithType(t1));
+				if(!this.tryUnify(t1,t2)) {
+					this.unify(t2,t1,e2);
+				}
+				var _g1 = this.follow(t1);
+				var _g2 = this.follow(t2);
+				switch(_g1._hx_index) {
+				case 2:
+					switch(_g2._hx_index) {
+					case 2:
+						if(op == "/") {
+							return hscript_TType.TFloat;
+						}
+						return hscript_TType.TInt;
+					case 3:case 5:
+						return hscript_TType.TFloat;
+					default:
+						this.unify(t1,hscript_TType.TFloat,e1);
+						this.unify(t2,hscript_TType.TFloat,e2);
+					}
+					break;
+				case 3:
+					switch(_g2._hx_index) {
+					case 2:case 3:case 5:
+						return hscript_TType.TFloat;
+					default:
+						this.unify(t1,hscript_TType.TFloat,e1);
+						this.unify(t2,hscript_TType.TFloat,e2);
+					}
+					break;
+				case 5:
+					switch(_g2._hx_index) {
+					case 2:case 3:case 5:
+						return hscript_TType.TFloat;
+					default:
+						this.unify(t1,hscript_TType.TFloat,e1);
+						this.unify(t2,hscript_TType.TFloat,e2);
+					}
+					break;
+				default:
+					this.unify(t1,hscript_TType.TFloat,e1);
+					this.unify(t2,hscript_TType.TFloat,e2);
+				}
+				break;
+			case "+":
+				var t1 = this.typeExpr(e1,hscript__$Checker_WithType.WithType(hscript_TType.TInt));
+				var t2 = this.typeExpr(e2,hscript__$Checker_WithType.WithType(t1));
+				this.tryUnify(t1,t2);
+				var _g1 = this.follow(t1);
+				var _g2 = this.follow(t2);
+				switch(_g1._hx_index) {
+				case 2:
+					switch(_g2._hx_index) {
+					case 2:
+						return hscript_TType.TInt;
+					case 3:
+						return hscript_TType.TFloat;
+					case 5:
+						return hscript_TType.TDynamic;
+					default:
+						var t1 = _g1;
+						var t2 = _g2;
+						if(this.isString(t1) || this.isString(t2)) {
+							return this.types.t_string;
+						}
+						this.unify(t1,hscript_TType.TFloat,e1);
+						this.unify(t2,hscript_TType.TFloat,e2);
+					}
+					break;
+				case 3:
+					switch(_g2._hx_index) {
+					case 2:case 3:
+						return hscript_TType.TFloat;
+					case 5:
+						return hscript_TType.TDynamic;
+					default:
+						var t1 = _g1;
+						var t2 = _g2;
+						if(this.isString(t1) || this.isString(t2)) {
+							return this.types.t_string;
+						}
+						this.unify(t1,hscript_TType.TFloat,e1);
+						this.unify(t2,hscript_TType.TFloat,e2);
+					}
+					break;
+				case 5:
+					return hscript_TType.TDynamic;
+				default:
+					if(_g2._hx_index == 5) {
+						return hscript_TType.TDynamic;
+					} else {
+						var t1 = _g1;
+						var t2 = _g2;
+						if(this.isString(t1) || this.isString(t2)) {
+							return this.types.t_string;
+						}
+						this.unify(t1,hscript_TType.TFloat,e1);
+						this.unify(t2,hscript_TType.TFloat,e2);
+					}
+				}
+				break;
+			case "...":
+				this.typeExprWith(e1,hscript_TType.TInt);
+				this.typeExprWith(e2,hscript_TType.TInt);
+				return this.makeIterator(hscript_TType.TInt);
+			case "&":case "<<":case ">>":case ">>>":case "^":case "|":
+				this.typeExprWith(e1,hscript_TType.TInt);
+				this.typeExprWith(e2,hscript_TType.TInt);
+				return hscript_TType.TInt;
+			case "<":case "<=":case ">":case ">=":
+				var t1 = this.typeExpr(e1,hscript__$Checker_WithType.Value);
+				var t2 = this.typeExpr(e2,hscript__$Checker_WithType.WithType(t1));
+				if(!this.tryUnify(t1,t2)) {
+					this.unify(t2,t1,e2);
+				}
+				var _g1 = this.follow(t1);
+				switch(_g1._hx_index) {
+				case 2:case 3:case 4:
+					break;
+				case 9:
+					var _g2 = _g1.c;
+					var _g3 = _g1.args;
+					var _g1 = _g2.constructor;
+					var _g1 = _g2.fields;
+					var _g1 = _g2.interfaces;
+					var _g1 = _g2.isInterface;
+					var _g1 = _g2.meta;
+					var _g1 = _g2.params;
+					var _g1 = _g2.statics;
+					var _g1 = _g2.superClass;
+					if(_g2.name != "String") {
+						var e = hscript_ErrorDef.ECustom("Cannot compare " + hscript_Checker.typeStr(t1));
+						var e3 = new hscript_Error(e,expr.pmin,expr.pmax,expr.origin,expr.line);
+						if(!this.isCompletion) {
+							throw haxe_Exception.thrown(e3);
+						}
+					}
+					break;
+				default:
+					var e = hscript_ErrorDef.ECustom("Cannot compare " + hscript_Checker.typeStr(t1));
+					var e3 = new hscript_Error(e,expr.pmin,expr.pmax,expr.origin,expr.line);
+					if(!this.isCompletion) {
+						throw haxe_Exception.thrown(e3);
+					}
+				}
+				return hscript_TType.TBool;
+			case "=":
+				if(this.allowDefine) {
+					var _g1 = e1.e;
+					if(_g1._hx_index == 1) {
+						var i = _g1.v;
+						if(!Object.prototype.hasOwnProperty.call(this.locals.h,i) && !Object.prototype.hasOwnProperty.call(this.globals.h,i)) {
+							var vt = this.typeExpr(e2,hscript__$Checker_WithType.Value);
+							this.locals.h[i] = vt;
+							return vt;
+						}
+					}
+				}
+				var vt;
+				var _g1 = e1.e;
+				if(_g1._hx_index == 5) {
+					var o = _g1.e;
+					var f = _g1.f;
+					vt = this.typeField(o,f,e1,true);
+				} else {
+					vt = this.typeExpr(e1,hscript__$Checker_WithType.Value);
+				}
+				this.typeExprWith(e2,vt);
+				return vt;
+			case "&&":case "||":
+				this.typeExprWith(e1,hscript_TType.TBool);
+				this.typeExprWith(e2,hscript_TType.TBool);
+				return hscript_TType.TBool;
+			default:
+				if(HxOverrides.cca(op,op.length - 1) == 61) {
+					var t = this.typeExpr(this.mk(hscript_ExprDef.EBinop(HxOverrides.substr(op,0,op.length - 1),e1,e2),expr),withType);
+					return this.typeExpr(this.mk(hscript_ExprDef.EBinop("=",e1,e2),expr),withType);
+				}
+				var e = hscript_ErrorDef.ECustom("Unsupported operation " + op);
+				var e1 = new hscript_Error(e,expr.pmin,expr.pmax,expr.origin,expr.line);
+				if(!this.isCompletion) {
+					throw haxe_Exception.thrown(e1);
+				}
+			}
+			break;
+		case 7:
+			var _g1 = _g.prefix;
+			var op = _g.op;
+			var e = _g.e;
+			var et = this.typeExpr(e,hscript__$Checker_WithType.Value);
+			switch(op) {
+			case "!":
+				this.unify(et,hscript_TType.TBool,e);
+				return et;
+			case "++":case "-":case "--":
+				this.unify(et,hscript_TType.TInt,e);
+				return et;
+			default:
+			}
+			break;
+		case 8:
+			var e = _g.e;
+			var params = _g.params;
+			var _g1 = e.e;
+			if(_g1._hx_index == 5) {
+				if(_g1.f == "bind") {
+					var val = _g1.e;
+					var ft = this.typeExpr(val,hscript__$Checker_WithType.Value);
+					if(ft._hx_index == 13) {
+						var args = ft.args;
+						var ret = ft.ret;
+						var remainArgs = args.slice();
+						var _g1 = 0;
+						while(_g1 < params.length) {
+							var p = params[_g1];
+							++_g1;
+							var a = remainArgs.shift();
+							if(a == null) {
+								var e1 = hscript_ErrorDef.ECustom("Too many arguments");
+								var e2 = new hscript_Error(e1,p.pmin,p.pmax,p.origin,p.line);
+								if(!this.isCompletion) {
+									throw haxe_Exception.thrown(e2);
+								}
+								return hscript_TType.TFun([],ret);
+							}
+							this.typeExprWith(p,a.t);
+						}
+						return hscript_TType.TFun(remainArgs,ret);
+					}
+				}
+			}
+			var _g1 = e.e;
+			var ft;
+			if(_g1._hx_index == 1) {
+				var _g2 = _g1.v;
+				if(withType._hx_index == 2) {
+					var _g1 = withType.t;
+					if(_g1._hx_index == 10) {
+						var _g2 = _g1.e;
+						var _g2 = _g1.args;
+						ft = withType;
+					} else {
+						ft = hscript__$Checker_WithType.Value;
+					}
+				} else {
+					ft = hscript__$Checker_WithType.Value;
+				}
+			} else {
+				ft = hscript__$Checker_WithType.Value;
+			}
+			var ft1 = this.typeExpr(e,ft);
+			var _g1 = this.follow(ft1);
+			switch(_g1._hx_index) {
+			case 5:
+				var _g2 = 0;
+				while(_g2 < params.length) {
+					var p = params[_g2];
+					++_g2;
+					this.typeExpr(p,hscript__$Checker_WithType.Value);
+				}
+				return this.makeMono();
+			case 13:
+				var args = _g1.args;
+				var ret = _g1.ret;
+				var _g1 = 0;
+				var _g2 = params.length;
+				while(_g1 < _g2) {
+					var i = _g1++;
+					var a = args[i];
+					if(a == null) {
+						var curExpr = params[i];
+						var e1 = hscript_ErrorDef.ECustom("Too many arguments");
+						var e2 = new hscript_Error(e1,curExpr.pmin,curExpr.pmax,curExpr.origin,curExpr.line);
+						if(!this.isCompletion) {
+							throw haxe_Exception.thrown(e2);
+						}
+						break;
+					}
+					var t = this.typeExpr(params[i],a == null ? hscript__$Checker_WithType.Value : hscript__$Checker_WithType.WithType(a.t));
+					this.unify(t,a.t,params[i]);
+				}
+				var _g1 = params.length;
+				var _g2 = args.length;
+				while(_g1 < _g2) {
+					var i = _g1++;
+					if(!args[i].opt) {
+						var e1 = hscript_ErrorDef.ECustom("Missing argument " + args[i].name + ":" + hscript_Checker.typeStr(args[i].t));
+						var e2 = new hscript_Error(e1,expr.pmin,expr.pmax,expr.origin,expr.line);
+						if(!this.isCompletion) {
+							throw haxe_Exception.thrown(e2);
+						}
+					}
+				}
+				return ret;
+			default:
+				var e1 = hscript_ErrorDef.ECustom(hscript_Checker.typeStr(ft1) + " cannot be called");
+				var e2 = new hscript_Error(e1,e.pmin,e.pmax,e.origin,e.line);
+				if(!this.isCompletion) {
+					throw haxe_Exception.thrown(e2);
+				}
+				return this.makeMono();
+			}
+			break;
+		case 9:
+			var cond = _g.cond;
+			var e1 = _g.e1;
+			var e2 = _g.e2;
+			this.typeExprWith(cond,hscript_TType.TBool);
+			var t1 = this.typeExpr(e1,withType);
+			if(e2 == null) {
+				return t1;
+			}
+			var t2 = this.typeExpr(e2,withType);
+			if(withType == hscript__$Checker_WithType.NoValue) {
+				return hscript_TType.TVoid;
+			}
+			if(this.tryUnify(t2,t1)) {
+				return t1;
+			}
+			if(this.tryUnify(t1,t2)) {
+				return t2;
+			}
+			this.unify(t2,t1,e2);
+			break;
+		case 10:
+			var cond = _g.cond;
+			var e = _g.e;
+			this.typeExprWith(cond,hscript_TType.TBool);
+			this.typeExpr(e,hscript__$Checker_WithType.NoValue);
+			return hscript_TType.TVoid;
+		case 11:
+			var v = _g.v;
+			var it = _g.it;
+			var e = _g.e;
+			var locals = this.saveLocals();
+			var itt = this.typeExpr(it,hscript__$Checker_WithType.Value);
+			var vt = this.getIteratorType(it,itt);
+			this.locals.h[v] = vt;
+			this.typeExpr(e,hscript__$Checker_WithType.NoValue);
+			this.locals = locals;
+			return hscript_TType.TVoid;
+		case 12:case 13:
+			return hscript_TType.TVoid;
+		case 14:
+			var args = _g.args;
+			var body = _g.e;
+			var name = _g.name;
+			var ret = _g.ret;
+			var ft = null;
+			var tret = null;
+			var targs = null;
+			if(this.currentFunType != null) {
+				var _g1 = this.currentFunType;
+				if(_g1._hx_index == 13) {
+					var args1 = _g1.args;
+					var ret1 = _g1.ret;
+					ft = this.currentFunType;
+					tret = ret1;
+					targs = args1;
+				} else {
+					throw haxe_Exception.thrown("assert");
+				}
+				this.currentFunType = null;
+			} else {
+				tret = ret == null ? this.makeMono() : this.makeType(ret,expr);
+			}
+			var locals = this.saveLocals();
+			var oldRet = this.allowReturn;
+			var oldGDef = this.allowDefine;
+			var oldHasRet = this.hasReturn;
+			this.allowReturn = tret;
+			this.allowDefine = false;
+			this.hasReturn = false;
+			var withArgs = null;
+			var tmp;
+			if(name != null) {
+				var tmp1;
+				if(withType._hx_index == 2) {
+					var _hx_tmp = this.follow(withType.t);
+					if(_hx_tmp._hx_index == 13) {
+						var _g1 = _hx_tmp.args;
+						var _g1 = _hx_tmp.ret;
+						tmp1 = true;
+					} else {
+						tmp1 = false;
+					}
+				} else {
+					tmp1 = false;
+				}
+				tmp = !tmp1;
+			} else {
+				tmp = false;
+			}
+			if(tmp) {
+				var ev = this.events.h[name];
+				if(ev != null) {
+					withType = hscript__$Checker_WithType.WithType(ev);
+				}
+			}
+			if(withType._hx_index == 2) {
+				var _hx_tmp = this.follow(withType.t);
+				if(_hx_tmp._hx_index == 13) {
+					var args1 = _hx_tmp.args;
+					var ret = _hx_tmp.ret;
+					withArgs = args1;
+					this.unify(tret,ret,expr);
+				}
+			}
+			if(targs == null) {
+				targs = this.typeArgs(args,expr);
+			}
+			var _g1 = 0;
+			var _g2 = targs.length;
+			while(_g1 < _g2) {
+				var i = _g1++;
+				var a = targs[i];
+				if(withArgs != null) {
+					if(i < withArgs.length) {
+						this.unify(withArgs[i].t,a.t,expr);
+					} else {
+						var e = hscript_ErrorDef.ECustom("Extra argument " + a.name);
+						var e1 = new hscript_Error(e,expr.pmin,expr.pmax,expr.origin,expr.line);
+						if(!this.isCompletion) {
+							throw haxe_Exception.thrown(e1);
+						}
+					}
+				}
+				this.locals.h[a.name] = a.t;
+			}
+			if(withArgs != null && targs.length < withArgs.length) {
+				var msg = "Missing " + (withArgs.length - targs.length) + " arguments (";
+				var _g1 = [];
+				var _g2 = targs.length;
+				var _g3 = withArgs.length;
+				while(_g2 < _g3) {
+					var i = _g2++;
+					_g1.push(hscript_Checker.typeStr(withArgs[i].t));
+				}
+				var e = hscript_ErrorDef.ECustom(msg + _g1.join(",") + ")");
+				var e1 = new hscript_Error(e,expr.pmin,expr.pmax,expr.origin,expr.line);
+				if(!this.isCompletion) {
+					throw haxe_Exception.thrown(e1);
+				}
+			}
+			this.typeExpr(body,hscript__$Checker_WithType.NoValue);
+			if(!this.hasReturn && !this.tryUnify(tret,hscript_TType.TVoid)) {
+				var e = hscript_ErrorDef.ECustom("Missing return " + hscript_Checker.typeStr(tret));
+				var e1 = new hscript_Error(e,expr.pmin,expr.pmax,expr.origin,expr.line);
+				if(!this.isCompletion) {
+					throw haxe_Exception.thrown(e1);
+				}
+			}
+			this.allowDefine = oldGDef;
+			this.allowReturn = oldRet;
+			this.hasReturn = oldHasRet;
+			this.locals = locals;
+			if(ft == null) {
+				ft = hscript_TType.TFun(targs,tret);
+				if(name != null) {
+					locals.h[name] = ft;
+				}
+			}
+			return ft;
+		case 15:
+			var v = _g.e;
+			var et = v == null ? hscript_TType.TVoid : this.typeExpr(v,this.allowReturn == null ? hscript__$Checker_WithType.Value : hscript__$Checker_WithType.WithType(this.allowReturn));
+			this.hasReturn = true;
+			if(this.allowReturn == null) {
+				var e = hscript_ErrorDef.ECustom("Return not allowed here");
+				var e1 = new hscript_Error(e,expr.pmin,expr.pmax,expr.origin,expr.line);
+				if(!this.isCompletion) {
+					throw haxe_Exception.thrown(e1);
+				}
+			} else {
+				this.unify(et,this.allowReturn,v == null ? expr : v);
+			}
+			return this.makeMono();
+		case 16:
+			var a = _g.e;
+			var index = _g.index;
+			this.typeExprWith(index,hscript_TType.TInt);
+			var at = this.typeExpr(a,hscript__$Checker_WithType.Value);
+			var _g1 = this.follow(at);
+			if(_g1._hx_index == 9) {
+				var _g2 = _g1.c;
+				var _g3 = _g1.args;
+				var _g1 = _g2.constructor;
+				var _g1 = _g2.fields;
+				var _g1 = _g2.interfaces;
+				var _g1 = _g2.isInterface;
+				var _g1 = _g2.meta;
+				var _g1 = _g2.params;
+				var _g1 = _g2.statics;
+				var _g1 = _g2.superClass;
+				if(_g2.name == "Array") {
+					if(_g3.length == 1) {
+						var et = _g3[0];
+						return et;
+					} else {
+						var e = hscript_ErrorDef.ECustom(hscript_Checker.typeStr(at) + " is not an Array");
+						var e1 = new hscript_Error(e,a.pmin,a.pmax,a.origin,a.line);
+						if(!this.isCompletion) {
+							throw haxe_Exception.thrown(e1);
+						}
+					}
+				} else {
+					var e = hscript_ErrorDef.ECustom(hscript_Checker.typeStr(at) + " is not an Array");
+					var e1 = new hscript_Error(e,a.pmin,a.pmax,a.origin,a.line);
+					if(!this.isCompletion) {
+						throw haxe_Exception.thrown(e1);
+					}
+				}
+			} else {
+				var e = hscript_ErrorDef.ECustom(hscript_Checker.typeStr(at) + " is not an Array");
+				var e1 = new hscript_Error(e,a.pmin,a.pmax,a.origin,a.line);
+				if(!this.isCompletion) {
+					throw haxe_Exception.thrown(e1);
+				}
+			}
+			break;
+		case 17:
+			var el = _g.e;
+			var et = null;
+			var _g1 = 0;
+			while(_g1 < el.length) {
+				var v = el[_g1];
+				++_g1;
+				var t = this.typeExpr(v,et == null ? hscript__$Checker_WithType.Value : hscript__$Checker_WithType.WithType(et));
+				if(et == null) {
+					et = t;
+				} else if(!this.tryUnify(t,et)) {
+					if(this.tryUnify(et,t)) {
+						et = t;
+					} else {
+						this.unify(t,et,v);
+					}
+				}
+			}
+			if(et == null) {
+				et = this.makeMono();
+			}
+			return this.types.getType("Array",[et]);
+		case 18:
+			var cl = _g.cl;
+			var params = _g.params;
+			break;
+		case 19:
+			var e = _g.e;
+			this.typeExpr(e,hscript__$Checker_WithType.Value);
+			return this.makeMono();
+		case 20:
+			var etry = _g.e;
+			var v = _g.v;
+			var et = _g.t;
+			var ecatch = _g.ecatch;
+			var vt = this.typeExpr(etry,withType);
+			var old = this.locals.h[v];
+			var this1 = this.locals;
+			var value = this.makeType(et,ecatch);
+			this1.h[v] = value;
+			var ct = this.typeExpr(ecatch,withType);
+			if(old != null) {
+				this.locals.h[v] = old;
+			} else {
+				var _this = this.locals;
+				if(Object.prototype.hasOwnProperty.call(_this.h,v)) {
+					delete(_this.h[v]);
+				}
+			}
+			if(withType == hscript__$Checker_WithType.NoValue) {
+				return hscript_TType.TVoid;
+			}
+			if(this.tryUnify(vt,ct)) {
+				return ct;
+			}
+			this.unify(ct,vt,ecatch);
+			return vt;
+		case 21:
+			var fl = _g.fl;
+			if(withType._hx_index == 2) {
+				var _hx_tmp = this.follow(withType.t);
+				if(_hx_tmp._hx_index == 14) {
+					var tfields = _hx_tmp.fields;
+					if(tfields.length > 0) {
+						var map_h = Object.create(null);
+						var _g1 = 0;
+						while(_g1 < tfields.length) {
+							var f = tfields[_g1];
+							++_g1;
+							map_h[f.name] = f;
+						}
+						var _g1 = [];
+						var _g2 = 0;
+						while(_g2 < fl.length) {
+							var f = fl[_g2];
+							++_g2;
+							var ft = map_h[f.name];
+							var ft1;
+							if(ft == null) {
+								var curExpr = f.e;
+								var e = hscript_ErrorDef.ECustom("Extra field " + f.name);
+								var e1 = new hscript_Error(e,curExpr.pmin,curExpr.pmax,curExpr.origin,curExpr.line);
+								if(!this.isCompletion) {
+									throw haxe_Exception.thrown(e1);
+								}
+								ft1 = hscript_TType.TDynamic;
+							} else {
+								ft1 = ft.t;
+							}
+							_g1.push({ t : this.typeExprWith(f.e,ft1), opt : false, name : f.name});
+						}
+						return hscript_TType.TAnon(_g1);
+					} else {
+						var _g1 = [];
+						var _g2 = 0;
+						while(_g2 < fl.length) {
+							var f = fl[_g2];
+							++_g2;
+							_g1.push({ t : this.typeExpr(f.e,hscript__$Checker_WithType.Value), opt : false, name : f.name});
+						}
+						return hscript_TType.TAnon(_g1);
+					}
+				} else {
+					var _g1 = [];
+					var _g2 = 0;
+					while(_g2 < fl.length) {
+						var f = fl[_g2];
+						++_g2;
+						_g1.push({ t : this.typeExpr(f.e,hscript__$Checker_WithType.Value), opt : false, name : f.name});
+					}
+					return hscript_TType.TAnon(_g1);
+				}
+			} else {
+				var _g1 = [];
+				var _g2 = 0;
+				while(_g2 < fl.length) {
+					var f = fl[_g2];
+					++_g2;
+					_g1.push({ t : this.typeExpr(f.e,hscript__$Checker_WithType.Value), opt : false, name : f.name});
+				}
+				return hscript_TType.TAnon(_g1);
+			}
+			break;
+		case 22:
+			var cond = _g.cond;
+			var e1 = _g.e1;
+			var e2 = _g.e2;
+			this.typeExprWith(cond,hscript_TType.TBool);
+			var t1 = this.typeExpr(e1,withType);
+			if(e2 == null) {
+				return t1;
+			}
+			var t2 = this.typeExpr(e2,withType);
+			if(withType == hscript__$Checker_WithType.NoValue) {
+				return hscript_TType.TVoid;
+			}
+			if(this.tryUnify(t2,t1)) {
+				return t1;
+			}
+			if(this.tryUnify(t1,t2)) {
+				return t2;
+			}
+			this.unify(t2,t1,e2);
+			break;
+		case 23:
+			var value = _g.e;
+			var cases = _g.cases;
+			var defaultExpr = _g.defaultExpr;
+			var tmin = null;
+			var vt = this.typeExpr(value,hscript__$Checker_WithType.Value);
+			var _g1 = 0;
+			while(_g1 < cases.length) {
+				var c = cases[_g1];
+				++_g1;
+				var _g2 = 0;
+				var _g3 = c.values;
+				while(_g2 < _g3.length) {
+					var v = _g3[_g2];
+					++_g2;
+					var ct = this.typeExpr(v,hscript__$Checker_WithType.WithType(vt));
+					this.unify(ct,vt,v);
+				}
+				var et = this.typeExpr(c.expr,withType);
+				var p = c.expr;
+				if(withType != hscript__$Checker_WithType.NoValue) {
+					if(tmin == null) {
+						tmin = et;
+					} else if(!_gthis.tryUnify(et,tmin)) {
+						_gthis.unify(tmin,et,p);
+						tmin = et;
+					}
+				}
+			}
+			if(defaultExpr != null) {
+				var t = this.typeExpr(defaultExpr,withType);
+				if(withType != hscript__$Checker_WithType.NoValue) {
+					if(tmin == null) {
+						tmin = t;
+					} else if(!_gthis.tryUnify(t,tmin)) {
+						_gthis.unify(tmin,t,defaultExpr);
+						tmin = t;
+					}
+				}
+			}
+			if(withType == hscript__$Checker_WithType.NoValue) {
+				return hscript_TType.TVoid;
+			} else if(tmin == null) {
+				return this.makeMono();
+			} else {
+				return tmin;
+			}
+			break;
+		case 24:
+			var cond = _g.cond;
+			var e = _g.e;
+			this.typeExprWith(cond,hscript_TType.TBool);
+			this.typeExpr(e,hscript__$Checker_WithType.NoValue);
+			return hscript_TType.TVoid;
+		case 25:
+			var _g1 = _g.args;
+			var m = _g.name;
+			var e = _g.e;
+			if(m == ":untyped" && this.allowUntypedMeta) {
+				return this.makeMono();
+			}
+			return this.typeExpr(e,withType);
+		case 26:
+			var v = _g.e;
+			var t = _g.t;
+			var ct = this.makeType(t,expr);
+			var vt = this.typeExpr(v,hscript__$Checker_WithType.WithType(ct));
+			this.unify(vt,ct,v);
+			return ct;
+		}
+		var e = expr.e;
+		var e1 = hscript_ErrorDef.ECustom("Don't know how to type " + $hxEnums[e.__enum__].__constructs__[e._hx_index]._hx_name);
+		var e = new hscript_Error(e1,expr.pmin,expr.pmax,expr.origin,expr.line);
+		if(!this.isCompletion) {
+			throw haxe_Exception.thrown(e);
+		}
+		return hscript_TType.TDynamic;
+	}
+	,getIteratorType: function(it,itt) {
+		var _g = this.follow(itt);
+		if(_g._hx_index == 9) {
+			var _g1 = _g.c;
+			var _g2 = _g.args;
+			var _g = _g1.constructor;
+			var _g = _g1.fields;
+			var _g = _g1.interfaces;
+			var _g = _g1.isInterface;
+			var _g = _g1.meta;
+			var _g = _g1.params;
+			var _g = _g1.statics;
+			var _g = _g1.superClass;
+			if(_g1.name == "Array") {
+				if(_g2.length == 1) {
+					var t = _g2[0];
+					return t;
+				}
+			}
+		}
+		var ft = this.getField(itt,"iterator",it);
+		if(ft == null) {
+			if(itt._hx_index == 12) {
+				var a = itt.a;
+				var args = itt.args;
+				var at = this.apply(a.t,a.params,args);
+				return this.getIteratorType(it,at);
+			}
+		}
+		if(ft != null) {
+			if(ft == null) {
+				ft = null;
+			} else if(ft._hx_index == 13) {
+				if(ft.args.length == 0) {
+					var ret = ft.ret;
+					ft = ret;
+				} else {
+					ft = null;
+				}
+			} else {
+				ft = null;
+			}
+		}
+		var t = this.makeMono();
+		var iter = this.makeIterator(t);
+		this.unify(ft != null ? ft : itt,iter,it);
+		return t;
+	}
+	,__class__: hscript_Checker
+};
+var hscript_Const = $hxEnums["hscript.Const"] = { __ename__:true,__constructs__:null
+	,CInt: ($_=function(v) { return {_hx_index:0,v:v,__enum__:"hscript.Const",toString:$estr}; },$_._hx_name="CInt",$_.__params__ = ["v"],$_)
+	,CFloat: ($_=function(f) { return {_hx_index:1,f:f,__enum__:"hscript.Const",toString:$estr}; },$_._hx_name="CFloat",$_.__params__ = ["f"],$_)
+	,CString: ($_=function(s) { return {_hx_index:2,s:s,__enum__:"hscript.Const",toString:$estr}; },$_._hx_name="CString",$_.__params__ = ["s"],$_)
+};
+hscript_Const.__constructs__ = [hscript_Const.CInt,hscript_Const.CFloat,hscript_Const.CString];
+var hscript_ExprDef = $hxEnums["hscript.ExprDef"] = { __ename__:true,__constructs__:null
+	,EConst: ($_=function(c) { return {_hx_index:0,c:c,__enum__:"hscript.ExprDef",toString:$estr}; },$_._hx_name="EConst",$_.__params__ = ["c"],$_)
+	,EIdent: ($_=function(v) { return {_hx_index:1,v:v,__enum__:"hscript.ExprDef",toString:$estr}; },$_._hx_name="EIdent",$_.__params__ = ["v"],$_)
+	,EVar: ($_=function(n,t,e) { return {_hx_index:2,n:n,t:t,e:e,__enum__:"hscript.ExprDef",toString:$estr}; },$_._hx_name="EVar",$_.__params__ = ["n","t","e"],$_)
+	,EParent: ($_=function(e) { return {_hx_index:3,e:e,__enum__:"hscript.ExprDef",toString:$estr}; },$_._hx_name="EParent",$_.__params__ = ["e"],$_)
+	,EBlock: ($_=function(e) { return {_hx_index:4,e:e,__enum__:"hscript.ExprDef",toString:$estr}; },$_._hx_name="EBlock",$_.__params__ = ["e"],$_)
+	,EField: ($_=function(e,f) { return {_hx_index:5,e:e,f:f,__enum__:"hscript.ExprDef",toString:$estr}; },$_._hx_name="EField",$_.__params__ = ["e","f"],$_)
+	,EBinop: ($_=function(op,e1,e2) { return {_hx_index:6,op:op,e1:e1,e2:e2,__enum__:"hscript.ExprDef",toString:$estr}; },$_._hx_name="EBinop",$_.__params__ = ["op","e1","e2"],$_)
+	,EUnop: ($_=function(op,prefix,e) { return {_hx_index:7,op:op,prefix:prefix,e:e,__enum__:"hscript.ExprDef",toString:$estr}; },$_._hx_name="EUnop",$_.__params__ = ["op","prefix","e"],$_)
+	,ECall: ($_=function(e,params) { return {_hx_index:8,e:e,params:params,__enum__:"hscript.ExprDef",toString:$estr}; },$_._hx_name="ECall",$_.__params__ = ["e","params"],$_)
+	,EIf: ($_=function(cond,e1,e2) { return {_hx_index:9,cond:cond,e1:e1,e2:e2,__enum__:"hscript.ExprDef",toString:$estr}; },$_._hx_name="EIf",$_.__params__ = ["cond","e1","e2"],$_)
+	,EWhile: ($_=function(cond,e) { return {_hx_index:10,cond:cond,e:e,__enum__:"hscript.ExprDef",toString:$estr}; },$_._hx_name="EWhile",$_.__params__ = ["cond","e"],$_)
+	,EFor: ($_=function(v,it,e) { return {_hx_index:11,v:v,it:it,e:e,__enum__:"hscript.ExprDef",toString:$estr}; },$_._hx_name="EFor",$_.__params__ = ["v","it","e"],$_)
+	,EBreak: {_hx_name:"EBreak",_hx_index:12,__enum__:"hscript.ExprDef",toString:$estr}
+	,EContinue: {_hx_name:"EContinue",_hx_index:13,__enum__:"hscript.ExprDef",toString:$estr}
+	,EFunction: ($_=function(args,e,name,ret) { return {_hx_index:14,args:args,e:e,name:name,ret:ret,__enum__:"hscript.ExprDef",toString:$estr}; },$_._hx_name="EFunction",$_.__params__ = ["args","e","name","ret"],$_)
+	,EReturn: ($_=function(e) { return {_hx_index:15,e:e,__enum__:"hscript.ExprDef",toString:$estr}; },$_._hx_name="EReturn",$_.__params__ = ["e"],$_)
+	,EArray: ($_=function(e,index) { return {_hx_index:16,e:e,index:index,__enum__:"hscript.ExprDef",toString:$estr}; },$_._hx_name="EArray",$_.__params__ = ["e","index"],$_)
+	,EArrayDecl: ($_=function(e) { return {_hx_index:17,e:e,__enum__:"hscript.ExprDef",toString:$estr}; },$_._hx_name="EArrayDecl",$_.__params__ = ["e"],$_)
+	,ENew: ($_=function(cl,params) { return {_hx_index:18,cl:cl,params:params,__enum__:"hscript.ExprDef",toString:$estr}; },$_._hx_name="ENew",$_.__params__ = ["cl","params"],$_)
+	,EThrow: ($_=function(e) { return {_hx_index:19,e:e,__enum__:"hscript.ExprDef",toString:$estr}; },$_._hx_name="EThrow",$_.__params__ = ["e"],$_)
+	,ETry: ($_=function(e,v,t,ecatch) { return {_hx_index:20,e:e,v:v,t:t,ecatch:ecatch,__enum__:"hscript.ExprDef",toString:$estr}; },$_._hx_name="ETry",$_.__params__ = ["e","v","t","ecatch"],$_)
+	,EObject: ($_=function(fl) { return {_hx_index:21,fl:fl,__enum__:"hscript.ExprDef",toString:$estr}; },$_._hx_name="EObject",$_.__params__ = ["fl"],$_)
+	,ETernary: ($_=function(cond,e1,e2) { return {_hx_index:22,cond:cond,e1:e1,e2:e2,__enum__:"hscript.ExprDef",toString:$estr}; },$_._hx_name="ETernary",$_.__params__ = ["cond","e1","e2"],$_)
+	,ESwitch: ($_=function(e,cases,defaultExpr) { return {_hx_index:23,e:e,cases:cases,defaultExpr:defaultExpr,__enum__:"hscript.ExprDef",toString:$estr}; },$_._hx_name="ESwitch",$_.__params__ = ["e","cases","defaultExpr"],$_)
+	,EDoWhile: ($_=function(cond,e) { return {_hx_index:24,cond:cond,e:e,__enum__:"hscript.ExprDef",toString:$estr}; },$_._hx_name="EDoWhile",$_.__params__ = ["cond","e"],$_)
+	,EMeta: ($_=function(name,args,e) { return {_hx_index:25,name:name,args:args,e:e,__enum__:"hscript.ExprDef",toString:$estr}; },$_._hx_name="EMeta",$_.__params__ = ["name","args","e"],$_)
+	,ECheckType: ($_=function(e,t) { return {_hx_index:26,e:e,t:t,__enum__:"hscript.ExprDef",toString:$estr}; },$_._hx_name="ECheckType",$_.__params__ = ["e","t"],$_)
+};
+hscript_ExprDef.__constructs__ = [hscript_ExprDef.EConst,hscript_ExprDef.EIdent,hscript_ExprDef.EVar,hscript_ExprDef.EParent,hscript_ExprDef.EBlock,hscript_ExprDef.EField,hscript_ExprDef.EBinop,hscript_ExprDef.EUnop,hscript_ExprDef.ECall,hscript_ExprDef.EIf,hscript_ExprDef.EWhile,hscript_ExprDef.EFor,hscript_ExprDef.EBreak,hscript_ExprDef.EContinue,hscript_ExprDef.EFunction,hscript_ExprDef.EReturn,hscript_ExprDef.EArray,hscript_ExprDef.EArrayDecl,hscript_ExprDef.ENew,hscript_ExprDef.EThrow,hscript_ExprDef.ETry,hscript_ExprDef.EObject,hscript_ExprDef.ETernary,hscript_ExprDef.ESwitch,hscript_ExprDef.EDoWhile,hscript_ExprDef.EMeta,hscript_ExprDef.ECheckType];
+var hscript_CType = $hxEnums["hscript.CType"] = { __ename__:true,__constructs__:null
+	,CTPath: ($_=function(path,params) { return {_hx_index:0,path:path,params:params,__enum__:"hscript.CType",toString:$estr}; },$_._hx_name="CTPath",$_.__params__ = ["path","params"],$_)
+	,CTFun: ($_=function(args,ret) { return {_hx_index:1,args:args,ret:ret,__enum__:"hscript.CType",toString:$estr}; },$_._hx_name="CTFun",$_.__params__ = ["args","ret"],$_)
+	,CTAnon: ($_=function(fields) { return {_hx_index:2,fields:fields,__enum__:"hscript.CType",toString:$estr}; },$_._hx_name="CTAnon",$_.__params__ = ["fields"],$_)
+	,CTParent: ($_=function(t) { return {_hx_index:3,t:t,__enum__:"hscript.CType",toString:$estr}; },$_._hx_name="CTParent",$_.__params__ = ["t"],$_)
+	,CTOpt: ($_=function(t) { return {_hx_index:4,t:t,__enum__:"hscript.CType",toString:$estr}; },$_._hx_name="CTOpt",$_.__params__ = ["t"],$_)
+	,CTNamed: ($_=function(n,t) { return {_hx_index:5,n:n,t:t,__enum__:"hscript.CType",toString:$estr}; },$_._hx_name="CTNamed",$_.__params__ = ["n","t"],$_)
+};
+hscript_CType.__constructs__ = [hscript_CType.CTPath,hscript_CType.CTFun,hscript_CType.CTAnon,hscript_CType.CTParent,hscript_CType.CTOpt,hscript_CType.CTNamed];
+var hscript_Error = function(e,pmin,pmax,origin,line) {
+	this.e = e;
+	this.pmin = pmin;
+	this.pmax = pmax;
+	this.origin = origin;
+	this.line = line;
+};
+hscript_Error.__name__ = "hscript.Error";
+hscript_Error.prototype = {
+	toString: function() {
+		return hscript_Printer.errorToString(this);
+	}
+	,__class__: hscript_Error
+};
+var hscript_ErrorDef = $hxEnums["hscript.ErrorDef"] = { __ename__:true,__constructs__:null
+	,EInvalidChar: ($_=function(c) { return {_hx_index:0,c:c,__enum__:"hscript.ErrorDef",toString:$estr}; },$_._hx_name="EInvalidChar",$_.__params__ = ["c"],$_)
+	,EUnexpected: ($_=function(s) { return {_hx_index:1,s:s,__enum__:"hscript.ErrorDef",toString:$estr}; },$_._hx_name="EUnexpected",$_.__params__ = ["s"],$_)
+	,EUnterminatedString: {_hx_name:"EUnterminatedString",_hx_index:2,__enum__:"hscript.ErrorDef",toString:$estr}
+	,EUnterminatedComment: {_hx_name:"EUnterminatedComment",_hx_index:3,__enum__:"hscript.ErrorDef",toString:$estr}
+	,EInvalidPreprocessor: ($_=function(msg) { return {_hx_index:4,msg:msg,__enum__:"hscript.ErrorDef",toString:$estr}; },$_._hx_name="EInvalidPreprocessor",$_.__params__ = ["msg"],$_)
+	,EUnknownVariable: ($_=function(v) { return {_hx_index:5,v:v,__enum__:"hscript.ErrorDef",toString:$estr}; },$_._hx_name="EUnknownVariable",$_.__params__ = ["v"],$_)
+	,EInvalidIterator: ($_=function(v) { return {_hx_index:6,v:v,__enum__:"hscript.ErrorDef",toString:$estr}; },$_._hx_name="EInvalidIterator",$_.__params__ = ["v"],$_)
+	,EInvalidOp: ($_=function(op) { return {_hx_index:7,op:op,__enum__:"hscript.ErrorDef",toString:$estr}; },$_._hx_name="EInvalidOp",$_.__params__ = ["op"],$_)
+	,EInvalidAccess: ($_=function(f) { return {_hx_index:8,f:f,__enum__:"hscript.ErrorDef",toString:$estr}; },$_._hx_name="EInvalidAccess",$_.__params__ = ["f"],$_)
+	,ECustom: ($_=function(msg) { return {_hx_index:9,msg:msg,__enum__:"hscript.ErrorDef",toString:$estr}; },$_._hx_name="ECustom",$_.__params__ = ["msg"],$_)
+};
+hscript_ErrorDef.__constructs__ = [hscript_ErrorDef.EInvalidChar,hscript_ErrorDef.EUnexpected,hscript_ErrorDef.EUnterminatedString,hscript_ErrorDef.EUnterminatedComment,hscript_ErrorDef.EInvalidPreprocessor,hscript_ErrorDef.EUnknownVariable,hscript_ErrorDef.EInvalidIterator,hscript_ErrorDef.EInvalidOp,hscript_ErrorDef.EInvalidAccess,hscript_ErrorDef.ECustom];
+var hscript_ModuleDecl = $hxEnums["hscript.ModuleDecl"] = { __ename__:true,__constructs__:null
+	,DPackage: ($_=function(path) { return {_hx_index:0,path:path,__enum__:"hscript.ModuleDecl",toString:$estr}; },$_._hx_name="DPackage",$_.__params__ = ["path"],$_)
+	,DImport: ($_=function(path,everything) { return {_hx_index:1,path:path,everything:everything,__enum__:"hscript.ModuleDecl",toString:$estr}; },$_._hx_name="DImport",$_.__params__ = ["path","everything"],$_)
+	,DClass: ($_=function(c) { return {_hx_index:2,c:c,__enum__:"hscript.ModuleDecl",toString:$estr}; },$_._hx_name="DClass",$_.__params__ = ["c"],$_)
+	,DTypedef: ($_=function(c) { return {_hx_index:3,c:c,__enum__:"hscript.ModuleDecl",toString:$estr}; },$_._hx_name="DTypedef",$_.__params__ = ["c"],$_)
+};
+hscript_ModuleDecl.__constructs__ = [hscript_ModuleDecl.DPackage,hscript_ModuleDecl.DImport,hscript_ModuleDecl.DClass,hscript_ModuleDecl.DTypedef];
+var hscript_FieldAccess = $hxEnums["hscript.FieldAccess"] = { __ename__:true,__constructs__:null
+	,APublic: {_hx_name:"APublic",_hx_index:0,__enum__:"hscript.FieldAccess",toString:$estr}
+	,APrivate: {_hx_name:"APrivate",_hx_index:1,__enum__:"hscript.FieldAccess",toString:$estr}
+	,AInline: {_hx_name:"AInline",_hx_index:2,__enum__:"hscript.FieldAccess",toString:$estr}
+	,AOverride: {_hx_name:"AOverride",_hx_index:3,__enum__:"hscript.FieldAccess",toString:$estr}
+	,AStatic: {_hx_name:"AStatic",_hx_index:4,__enum__:"hscript.FieldAccess",toString:$estr}
+	,AMacro: {_hx_name:"AMacro",_hx_index:5,__enum__:"hscript.FieldAccess",toString:$estr}
+};
+hscript_FieldAccess.__constructs__ = [hscript_FieldAccess.APublic,hscript_FieldAccess.APrivate,hscript_FieldAccess.AInline,hscript_FieldAccess.AOverride,hscript_FieldAccess.AStatic,hscript_FieldAccess.AMacro];
+var hscript_FieldKind = $hxEnums["hscript.FieldKind"] = { __ename__:true,__constructs__:null
+	,KFunction: ($_=function(f) { return {_hx_index:0,f:f,__enum__:"hscript.FieldKind",toString:$estr}; },$_._hx_name="KFunction",$_.__params__ = ["f"],$_)
+	,KVar: ($_=function(v) { return {_hx_index:1,v:v,__enum__:"hscript.FieldKind",toString:$estr}; },$_._hx_name="KVar",$_.__params__ = ["v"],$_)
+};
+hscript_FieldKind.__constructs__ = [hscript_FieldKind.KFunction,hscript_FieldKind.KVar];
+var hscript_Token = $hxEnums["hscript.Token"] = { __ename__:true,__constructs__:null
+	,TEof: {_hx_name:"TEof",_hx_index:0,__enum__:"hscript.Token",toString:$estr}
+	,TConst: ($_=function(c) { return {_hx_index:1,c:c,__enum__:"hscript.Token",toString:$estr}; },$_._hx_name="TConst",$_.__params__ = ["c"],$_)
+	,TId: ($_=function(s) { return {_hx_index:2,s:s,__enum__:"hscript.Token",toString:$estr}; },$_._hx_name="TId",$_.__params__ = ["s"],$_)
+	,TOp: ($_=function(s) { return {_hx_index:3,s:s,__enum__:"hscript.Token",toString:$estr}; },$_._hx_name="TOp",$_.__params__ = ["s"],$_)
+	,TPOpen: {_hx_name:"TPOpen",_hx_index:4,__enum__:"hscript.Token",toString:$estr}
+	,TPClose: {_hx_name:"TPClose",_hx_index:5,__enum__:"hscript.Token",toString:$estr}
+	,TBrOpen: {_hx_name:"TBrOpen",_hx_index:6,__enum__:"hscript.Token",toString:$estr}
+	,TBrClose: {_hx_name:"TBrClose",_hx_index:7,__enum__:"hscript.Token",toString:$estr}
+	,TDot: {_hx_name:"TDot",_hx_index:8,__enum__:"hscript.Token",toString:$estr}
+	,TQuestionDot: {_hx_name:"TQuestionDot",_hx_index:9,__enum__:"hscript.Token",toString:$estr}
+	,TComma: {_hx_name:"TComma",_hx_index:10,__enum__:"hscript.Token",toString:$estr}
+	,TSemicolon: {_hx_name:"TSemicolon",_hx_index:11,__enum__:"hscript.Token",toString:$estr}
+	,TBkOpen: {_hx_name:"TBkOpen",_hx_index:12,__enum__:"hscript.Token",toString:$estr}
+	,TBkClose: {_hx_name:"TBkClose",_hx_index:13,__enum__:"hscript.Token",toString:$estr}
+	,TQuestion: {_hx_name:"TQuestion",_hx_index:14,__enum__:"hscript.Token",toString:$estr}
+	,TDoubleDot: {_hx_name:"TDoubleDot",_hx_index:15,__enum__:"hscript.Token",toString:$estr}
+	,TMeta: ($_=function(s) { return {_hx_index:16,s:s,__enum__:"hscript.Token",toString:$estr}; },$_._hx_name="TMeta",$_.__params__ = ["s"],$_)
+	,TPrepro: ($_=function(s) { return {_hx_index:17,s:s,__enum__:"hscript.Token",toString:$estr}; },$_._hx_name="TPrepro",$_.__params__ = ["s"],$_)
+};
+hscript_Token.__constructs__ = [hscript_Token.TEof,hscript_Token.TConst,hscript_Token.TId,hscript_Token.TOp,hscript_Token.TPOpen,hscript_Token.TPClose,hscript_Token.TBrOpen,hscript_Token.TBrClose,hscript_Token.TDot,hscript_Token.TQuestionDot,hscript_Token.TComma,hscript_Token.TSemicolon,hscript_Token.TBkOpen,hscript_Token.TBkClose,hscript_Token.TQuestion,hscript_Token.TDoubleDot,hscript_Token.TMeta,hscript_Token.TPrepro];
+var hscript_Parser = function() {
+	this.uid = 0;
+	this.preprocesorValues = new haxe_ds_StringMap();
+	this.line = 1;
+	this.opChars = "+*/-=!><&|^%~";
+	this.identChars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_";
+	var priorities = [["%"],["*","/"],["+","-"],["<<",">>",">>>"],["|","&","^"],["==","!=",">","<",">=","<="],["..."],["&&"],["||"],["=","+=","-=","*=","/=","%=","<<=",">>=",">>>=","|=","&=","^=","=>"],["->"]];
+	this.opPriority = new haxe_ds_StringMap();
+	this.opRightAssoc = new haxe_ds_StringMap();
+	var _g = 0;
+	var _g1 = priorities.length;
+	while(_g < _g1) {
+		var i = _g++;
+		var _g2 = 0;
+		var _g3 = priorities[i];
+		while(_g2 < _g3.length) {
+			var x = _g3[_g2];
+			++_g2;
+			this.opPriority.h[x] = i;
+			if(i == 9) {
+				this.opRightAssoc.h[x] = true;
+			}
+		}
+	}
+	var x = "!";
+	this.opPriority.h[x] = x == "++" || x == "--" ? -1 : -2;
+	var x = "++";
+	this.opPriority.h[x] = x == "++" || x == "--" ? -1 : -2;
+	var x = "--";
+	this.opPriority.h[x] = x == "++" || x == "--" ? -1 : -2;
+	var x = "~";
+	this.opPriority.h[x] = x == "++" || x == "--" ? -1 : -2;
+};
+hscript_Parser.__name__ = "hscript.Parser";
+hscript_Parser.prototype = {
+	get_currentPos: function() {
+		return this.readPos + this.offset;
+	}
+	,error: function(err,pmin,pmax) {
+		if(!this.resumeErrors) {
+			throw haxe_Exception.thrown(new hscript_Error(err,pmin,pmax,this.origin,this.line));
+		}
+	}
+	,invalidChar: function(c) {
+		if(!this.resumeErrors) {
+			throw haxe_Exception.thrown(new hscript_Error(hscript_ErrorDef.EInvalidChar(c),this.readPos - 1,this.readPos - 1,this.origin,this.line));
+		}
+	}
+	,initParser: function(origin,pos) {
+		this.preprocStack = [];
+		this.origin = origin;
+		this.readPos = 0;
+		this.tokenMin = this.oldTokenMin = pos;
+		this.tokenMax = this.oldTokenMax = pos;
+		this.tokens = new haxe_ds_List();
+		this.offset = pos;
+		this.char = -1;
+		this.ops = [];
+		this.idents = [];
+		this.uid = 0;
+		var _g = 0;
+		var _g1 = this.opChars.length;
+		while(_g < _g1) {
+			var i = _g++;
+			this.ops[HxOverrides.cca(this.opChars,i)] = true;
+		}
+		var _g = 0;
+		var _g1 = this.identChars.length;
+		while(_g < _g1) {
+			var i = _g++;
+			this.idents[HxOverrides.cca(this.identChars,i)] = true;
+		}
+	}
+	,parseString: function(s,origin,position) {
+		if(position == null) {
+			position = 0;
+		}
+		if(origin == null) {
+			origin = "hscript";
+		}
+		this.initParser(origin,position);
+		this.input = s;
+		this.readPos = 0;
+		var a = [];
+		while(true) {
+			var tk = this.token();
+			if(tk == hscript_Token.TEof) {
+				break;
+			}
+			this.tokens.push({ t : tk, min : this.tokenMin, max : this.tokenMax});
+			this.tokenMin = this.oldTokenMin;
+			this.tokenMax = this.oldTokenMax;
+			this.parseFullExpr(a);
+		}
+		if(a.length == 1) {
+			return a[0];
+		} else {
+			var e = hscript_ExprDef.EBlock(a);
+			var pmin = 0;
+			var pmax = null;
+			if(e == null) {
+				return null;
+			} else {
+				if(pmin == null) {
+					pmin = this.tokenMin;
+				}
+				if(pmax == null) {
+					pmax = this.tokenMax;
+				}
+				return { e : e, pmin : pmin, pmax : pmax, origin : this.origin, line : this.line};
+			}
+		}
+	}
+	,unexpected: function(tk) {
+		var err = hscript_ErrorDef.EUnexpected(this.tokenString(tk));
+		if(!this.resumeErrors) {
+			throw haxe_Exception.thrown(new hscript_Error(err,this.tokenMin,this.tokenMax,this.origin,this.line));
+		}
+		return null;
+	}
+	,push: function(tk) {
+		this.tokens.push({ t : tk, min : this.tokenMin, max : this.tokenMax});
+		this.tokenMin = this.oldTokenMin;
+		this.tokenMax = this.oldTokenMax;
+	}
+	,ensure: function(tk) {
+		var t = this.token();
+		if(t != tk) {
+			this.unexpected(t);
+		}
+	}
+	,ensureToken: function(tk) {
+		var t = this.token();
+		if(!Type.enumEq(t,tk)) {
+			this.unexpected(t);
+		}
+	}
+	,maybe: function(tk) {
+		var t = this.token();
+		if(Type.enumEq(t,tk)) {
+			return true;
+		}
+		this.tokens.push({ t : t, min : this.tokenMin, max : this.tokenMax});
+		this.tokenMin = this.oldTokenMin;
+		this.tokenMax = this.oldTokenMax;
+		return false;
+	}
+	,getIdent: function() {
+		var tk = this.token();
+		if(tk._hx_index == 2) {
+			var id = tk.s;
+			return id;
+		} else {
+			this.unexpected(tk);
+			return null;
+		}
+	}
+	,expr: function(e) {
+		return e.e;
+	}
+	,pmin: function(e) {
+		if(e == null) {
+			return 0;
+		} else {
+			return e.pmin;
+		}
+	}
+	,pmax: function(e) {
+		if(e == null) {
+			return 0;
+		} else {
+			return e.pmax;
+		}
+	}
+	,mk: function(e,pmin,pmax) {
+		if(e == null) {
+			return null;
+		}
+		if(pmin == null) {
+			pmin = this.tokenMin;
+		}
+		if(pmax == null) {
+			pmax = this.tokenMax;
+		}
+		return { e : e, pmin : pmin, pmax : pmax, origin : this.origin, line : this.line};
+	}
+	,isBlock: function(e) {
+		if(e == null) {
+			return false;
+		}
+		var _g = e.e;
+		switch(_g._hx_index) {
+		case 2:
+			var _g1 = _g.n;
+			var t = _g.t;
+			var e = _g.e;
+			if(e != null) {
+				return this.isBlock(e);
+			} else if(t != null) {
+				if(t == null) {
+					return false;
+				} else if(t._hx_index == 2) {
+					var _g1 = t.fields;
+					return true;
+				} else {
+					return false;
+				}
+			} else {
+				return false;
+			}
+			break;
+		case 4:
+			var _g1 = _g.e;
+			return true;
+		case 6:
+			var _g1 = _g.op;
+			var _g1 = _g.e1;
+			var e = _g.e2;
+			return this.isBlock(e);
+		case 7:
+			var _g1 = _g.op;
+			var prefix = _g.prefix;
+			var e = _g.e;
+			if(!prefix) {
+				return this.isBlock(e);
+			} else {
+				return false;
+			}
+			break;
+		case 9:
+			var _g1 = _g.cond;
+			var e1 = _g.e1;
+			var e2 = _g.e2;
+			if(e2 != null) {
+				return this.isBlock(e2);
+			} else {
+				return this.isBlock(e1);
+			}
+			break;
+		case 10:
+			var _g1 = _g.cond;
+			var e = _g.e;
+			return this.isBlock(e);
+		case 11:
+			var _g1 = _g.v;
+			var _g1 = _g.it;
+			var e = _g.e;
+			return this.isBlock(e);
+		case 14:
+			var _g1 = _g.args;
+			var _g1 = _g.name;
+			var _g1 = _g.ret;
+			var e = _g.e;
+			return this.isBlock(e);
+		case 15:
+			var e = _g.e;
+			if(e != null) {
+				return this.isBlock(e);
+			} else {
+				return false;
+			}
+			break;
+		case 20:
+			var _g1 = _g.e;
+			var _g1 = _g.v;
+			var _g1 = _g.t;
+			var e = _g.ecatch;
+			return this.isBlock(e);
+		case 21:
+			var _g1 = _g.fl;
+			return true;
+		case 23:
+			var _g1 = _g.e;
+			var _g1 = _g.cases;
+			var _g1 = _g.defaultExpr;
+			return true;
+		case 24:
+			var _g1 = _g.cond;
+			var e = _g.e;
+			return this.isBlock(e);
+		case 25:
+			var _g1 = _g.name;
+			var _g1 = _g.args;
+			var e = _g.e;
+			return this.isBlock(e);
+		default:
+			return false;
+		}
+	}
+	,parseFullExpr: function(exprs) {
+		var e = this.parseExpr();
+		exprs.push(e);
+		var tk = this.token();
+		while(true) {
+			var tmp;
+			if(tk == hscript_Token.TComma && e != null) {
+				var _g = e.e;
+				if(_g._hx_index == 2) {
+					var _g1 = _g.n;
+					var _g2 = _g.t;
+					var _g3 = _g.e;
+					tmp = true;
+				} else {
+					tmp = false;
+				}
+			} else {
+				tmp = false;
+			}
+			if(!tmp) {
+				break;
+			}
+			e = this.parseStructure("var");
+			exprs.push(e);
+			tk = this.token();
+		}
+		if(tk != hscript_Token.TSemicolon && tk != hscript_Token.TEof) {
+			if(this.isBlock(e)) {
+				this.tokens.push({ t : tk, min : this.tokenMin, max : this.tokenMax});
+				this.tokenMin = this.oldTokenMin;
+				this.tokenMax = this.oldTokenMax;
+			} else {
+				this.unexpected(tk);
+			}
+		}
+	}
+	,parseObject: function(p1) {
+		var fl = [];
+		_hx_loop1: while(true) {
+			var tk = this.token();
+			var id = null;
+			switch(tk._hx_index) {
+			case 1:
+				var c = tk.c;
+				if(!this.allowJSON) {
+					this.unexpected(tk);
+				}
+				if(c._hx_index == 2) {
+					var s = c.s;
+					id = s;
+				} else {
+					this.unexpected(tk);
+				}
+				break;
+			case 2:
+				var i = tk.s;
+				id = i;
+				break;
+			case 7:
+				break _hx_loop1;
+			default:
+				this.unexpected(tk);
+				break _hx_loop1;
+			}
+			var t = this.token();
+			if(t != hscript_Token.TDoubleDot) {
+				this.unexpected(t);
+			}
+			fl.push({ name : id, e : this.parseExpr()});
+			tk = this.token();
+			switch(tk._hx_index) {
+			case 7:
+				break _hx_loop1;
+			case 10:
+				break;
+			default:
+				this.unexpected(tk);
+			}
+		}
+		var e = hscript_ExprDef.EObject(fl);
+		var pmin = p1;
+		var pmax = null;
+		var tmp;
+		if(e == null) {
+			tmp = null;
+		} else {
+			if(pmin == null) {
+				pmin = this.tokenMin;
+			}
+			if(pmax == null) {
+				pmax = this.tokenMax;
+			}
+			tmp = { e : e, pmin : pmin, pmax : pmax, origin : this.origin, line : this.line};
+		}
+		return this.parseExprNext(tmp);
+	}
+	,parseExpr: function() {
+		var tk = this.token();
+		var p1 = this.tokenMin;
+		switch(tk._hx_index) {
+		case 1:
+			var c = tk.c;
+			var e = hscript_ExprDef.EConst(c);
+			var pmin = null;
+			var pmax = null;
+			var tmp;
+			if(e == null) {
+				tmp = null;
+			} else {
+				if(pmin == null) {
+					pmin = this.tokenMin;
+				}
+				if(pmax == null) {
+					pmax = this.tokenMax;
+				}
+				tmp = { e : e, pmin : pmin, pmax : pmax, origin : this.origin, line : this.line};
+			}
+			return this.parseExprNext(tmp);
+		case 2:
+			var id = tk.s;
+			var e = this.parseStructure(id);
+			if(e == null) {
+				var e1 = hscript_ExprDef.EIdent(id);
+				var pmin = null;
+				var pmax = null;
+				if(e1 == null) {
+					e = null;
+				} else {
+					if(pmin == null) {
+						pmin = this.tokenMin;
+					}
+					if(pmax == null) {
+						pmax = this.tokenMax;
+					}
+					e = { e : e1, pmin : pmin, pmax : pmax, origin : this.origin, line : this.line};
+				}
+			}
+			return this.parseExprNext(e);
+		case 3:
+			var op = tk.s;
+			if(op == "-") {
+				var start = this.tokenMin;
+				var e = this.parseExpr();
+				if(e == null) {
+					return this.makeUnop(op,e);
+				}
+				var _g = e.e;
+				if(_g._hx_index == 0) {
+					var _g1 = _g.c;
+					switch(_g1._hx_index) {
+					case 0:
+						var i = _g1.v;
+						var e1 = hscript_ExprDef.EConst(hscript_Const.CInt(-i));
+						var pmin = start;
+						var pmax = e == null ? 0 : e.pmax;
+						if(e1 == null) {
+							return null;
+						} else {
+							if(pmin == null) {
+								pmin = this.tokenMin;
+							}
+							if(pmax == null) {
+								pmax = this.tokenMax;
+							}
+							return { e : e1, pmin : pmin, pmax : pmax, origin : this.origin, line : this.line};
+						}
+						break;
+					case 1:
+						var f = _g1.f;
+						var e1 = hscript_ExprDef.EConst(hscript_Const.CFloat(-f));
+						var pmin = start;
+						var pmax = e == null ? 0 : e.pmax;
+						if(e1 == null) {
+							return null;
+						} else {
+							if(pmin == null) {
+								pmin = this.tokenMin;
+							}
+							if(pmax == null) {
+								pmax = this.tokenMax;
+							}
+							return { e : e1, pmin : pmin, pmax : pmax, origin : this.origin, line : this.line};
+						}
+						break;
+					default:
+						return this.makeUnop(op,e);
+					}
+				} else {
+					return this.makeUnop(op,e);
+				}
+			}
+			if(this.opPriority.h[op] < 0) {
+				return this.makeUnop(op,this.parseExpr());
+			}
+			return this.unexpected(tk);
+		case 4:
+			tk = this.token();
+			if(tk == hscript_Token.TPClose) {
+				var t = this.token();
+				if(!Type.enumEq(t,hscript_Token.TOp("->"))) {
+					this.unexpected(t);
+				}
+				var eret = this.parseExpr();
+				var e = hscript_ExprDef.EReturn(eret);
+				var pmin = p1;
+				var pmax = null;
+				var e1;
+				if(e == null) {
+					e1 = null;
+				} else {
+					if(pmin == null) {
+						pmin = this.tokenMin;
+					}
+					if(pmax == null) {
+						pmax = this.tokenMax;
+					}
+					e1 = { e : e, pmin : pmin, pmax : pmax, origin : this.origin, line : this.line};
+				}
+				var e = hscript_ExprDef.EFunction([],e1);
+				var pmin = p1;
+				var pmax = null;
+				if(e == null) {
+					return null;
+				} else {
+					if(pmin == null) {
+						pmin = this.tokenMin;
+					}
+					if(pmax == null) {
+						pmax = this.tokenMax;
+					}
+					return { e : e, pmin : pmin, pmax : pmax, origin : this.origin, line : this.line};
+				}
+			}
+			this.tokens.push({ t : tk, min : this.tokenMin, max : this.tokenMax});
+			this.tokenMin = this.oldTokenMin;
+			this.tokenMax = this.oldTokenMax;
+			var e = this.parseExpr();
+			tk = this.token();
+			switch(tk._hx_index) {
+			case 5:
+				var e1 = hscript_ExprDef.EParent(e);
+				var pmin = p1;
+				var pmax = this.tokenMax;
+				var tmp;
+				if(e1 == null) {
+					tmp = null;
+				} else {
+					if(pmin == null) {
+						pmin = this.tokenMin;
+					}
+					if(pmax == null) {
+						pmax = this.tokenMax;
+					}
+					tmp = { e : e1, pmin : pmin, pmax : pmax, origin : this.origin, line : this.line};
+				}
+				return this.parseExprNext(tmp);
+			case 10:
+				var _g = e.e;
+				if(_g._hx_index == 1) {
+					var v = _g.v;
+					return this.parseLambda([{ name : v}],e == null ? 0 : e.pmin);
+				}
+				break;
+			case 15:
+				var t = this.parseType();
+				tk = this.token();
+				switch(tk._hx_index) {
+				case 5:
+					var e1 = hscript_ExprDef.ECheckType(e,t);
+					var pmin = p1;
+					var pmax = this.tokenMax;
+					var tmp;
+					if(e1 == null) {
+						tmp = null;
+					} else {
+						if(pmin == null) {
+							pmin = this.tokenMin;
+						}
+						if(pmax == null) {
+							pmax = this.tokenMax;
+						}
+						tmp = { e : e1, pmin : pmin, pmax : pmax, origin : this.origin, line : this.line};
+					}
+					return this.parseExprNext(tmp);
+				case 10:
+					var _g = e.e;
+					if(_g._hx_index == 1) {
+						var v = _g.v;
+						return this.parseLambda([{ name : v, t : t}],e == null ? 0 : e.pmin);
+					}
+					break;
+				default:
+				}
+				break;
+			default:
+			}
+			return this.unexpected(tk);
+		case 6:
+			tk = this.token();
+			switch(tk._hx_index) {
+			case 1:
+				var c = tk.c;
+				if(this.allowJSON) {
+					if(c._hx_index == 2) {
+						var _g = c.s;
+						var tk2 = this.token();
+						this.tokens.push({ t : tk2, min : this.tokenMin, max : this.tokenMax});
+						this.tokenMin = this.oldTokenMin;
+						this.tokenMax = this.oldTokenMax;
+						this.tokens.push({ t : tk, min : this.tokenMin, max : this.tokenMax});
+						this.tokenMin = this.oldTokenMin;
+						this.tokenMax = this.oldTokenMax;
+						if(tk2._hx_index == 15) {
+							return this.parseExprNext(this.parseObject(p1));
+						}
+					} else {
+						this.tokens.push({ t : tk, min : this.tokenMin, max : this.tokenMax});
+						this.tokenMin = this.oldTokenMin;
+						this.tokenMax = this.oldTokenMax;
+					}
+				} else {
+					this.tokens.push({ t : tk, min : this.tokenMin, max : this.tokenMax});
+					this.tokenMin = this.oldTokenMin;
+					this.tokenMax = this.oldTokenMax;
+				}
+				break;
+			case 2:
+				var _g = tk.s;
+				var tk2 = this.token();
+				this.tokens.push({ t : tk2, min : this.tokenMin, max : this.tokenMax});
+				this.tokenMin = this.oldTokenMin;
+				this.tokenMax = this.oldTokenMax;
+				this.tokens.push({ t : tk, min : this.tokenMin, max : this.tokenMax});
+				this.tokenMin = this.oldTokenMin;
+				this.tokenMax = this.oldTokenMax;
+				if(tk2._hx_index == 15) {
+					return this.parseExprNext(this.parseObject(p1));
+				}
+				break;
+			case 7:
+				var e = hscript_ExprDef.EObject([]);
+				var pmin = p1;
+				var pmax = null;
+				var tmp;
+				if(e == null) {
+					tmp = null;
+				} else {
+					if(pmin == null) {
+						pmin = this.tokenMin;
+					}
+					if(pmax == null) {
+						pmax = this.tokenMax;
+					}
+					tmp = { e : e, pmin : pmin, pmax : pmax, origin : this.origin, line : this.line};
+				}
+				return this.parseExprNext(tmp);
+			default:
+				this.tokens.push({ t : tk, min : this.tokenMin, max : this.tokenMax});
+				this.tokenMin = this.oldTokenMin;
+				this.tokenMax = this.oldTokenMax;
+			}
+			var a = [];
+			while(true) {
+				this.parseFullExpr(a);
+				tk = this.token();
+				if(tk == hscript_Token.TBrClose || this.resumeErrors && tk == hscript_Token.TEof) {
+					break;
+				}
+				this.tokens.push({ t : tk, min : this.tokenMin, max : this.tokenMax});
+				this.tokenMin = this.oldTokenMin;
+				this.tokenMax = this.oldTokenMax;
+			}
+			var e = hscript_ExprDef.EBlock(a);
+			var pmin = p1;
+			var pmax = null;
+			if(e == null) {
+				return null;
+			} else {
+				if(pmin == null) {
+					pmin = this.tokenMin;
+				}
+				if(pmax == null) {
+					pmax = this.tokenMax;
+				}
+				return { e : e, pmin : pmin, pmax : pmax, origin : this.origin, line : this.line};
+			}
+			break;
+		case 12:
+			var a = [];
+			tk = this.token();
+			var first = true;
+			while(tk != hscript_Token.TBkClose && (!this.resumeErrors || tk != hscript_Token.TEof)) {
+				if(!first) {
+					if(tk != hscript_Token.TComma) {
+						this.unexpected(tk);
+					} else {
+						tk = this.token();
+					}
+				}
+				first = false;
+				this.tokens.push({ t : tk, min : this.tokenMin, max : this.tokenMax});
+				this.tokenMin = this.oldTokenMin;
+				this.tokenMax = this.oldTokenMax;
+				a.push(this.parseExpr());
+				tk = this.token();
+			}
+			if(a.length == 1 && a[0] != null) {
+				var _g = a[0].e;
+				switch(_g._hx_index) {
+				case 10:
+					var _g1 = _g.cond;
+					var _g1 = _g.e;
+					var tmp = "__a_" + this.uid++;
+					var e = hscript_ExprDef.EArrayDecl([]);
+					var pmin = p1;
+					var pmax = null;
+					var e1;
+					if(e == null) {
+						e1 = null;
+					} else {
+						if(pmin == null) {
+							pmin = this.tokenMin;
+						}
+						if(pmax == null) {
+							pmax = this.tokenMax;
+						}
+						e1 = { e : e, pmin : pmin, pmax : pmax, origin : this.origin, line : this.line};
+					}
+					var e = hscript_ExprDef.EVar(tmp,null,e1);
+					var pmin = p1;
+					var pmax = null;
+					var e1;
+					if(e == null) {
+						e1 = null;
+					} else {
+						if(pmin == null) {
+							pmin = this.tokenMin;
+						}
+						if(pmax == null) {
+							pmax = this.tokenMax;
+						}
+						e1 = { e : e, pmin : pmin, pmax : pmax, origin : this.origin, line : this.line};
+					}
+					var e = this.mapCompr(tmp,a[0]);
+					var e2 = hscript_ExprDef.EIdent(tmp);
+					var pmin = p1;
+					var pmax = null;
+					var e3;
+					if(e2 == null) {
+						e3 = null;
+					} else {
+						if(pmin == null) {
+							pmin = this.tokenMin;
+						}
+						if(pmax == null) {
+							pmax = this.tokenMax;
+						}
+						e3 = { e : e2, pmin : pmin, pmax : pmax, origin : this.origin, line : this.line};
+					}
+					var e2 = hscript_ExprDef.EBlock([e1,e,e3]);
+					var pmin = p1;
+					var pmax = null;
+					var e;
+					if(e2 == null) {
+						e = null;
+					} else {
+						if(pmin == null) {
+							pmin = this.tokenMin;
+						}
+						if(pmax == null) {
+							pmax = this.tokenMax;
+						}
+						e = { e : e2, pmin : pmin, pmax : pmax, origin : this.origin, line : this.line};
+					}
+					return this.parseExprNext(e);
+				case 11:
+					var _g1 = _g.v;
+					var _g1 = _g.it;
+					var _g1 = _g.e;
+					var tmp = "__a_" + this.uid++;
+					var e = hscript_ExprDef.EArrayDecl([]);
+					var pmin = p1;
+					var pmax = null;
+					var e1;
+					if(e == null) {
+						e1 = null;
+					} else {
+						if(pmin == null) {
+							pmin = this.tokenMin;
+						}
+						if(pmax == null) {
+							pmax = this.tokenMax;
+						}
+						e1 = { e : e, pmin : pmin, pmax : pmax, origin : this.origin, line : this.line};
+					}
+					var e = hscript_ExprDef.EVar(tmp,null,e1);
+					var pmin = p1;
+					var pmax = null;
+					var e1;
+					if(e == null) {
+						e1 = null;
+					} else {
+						if(pmin == null) {
+							pmin = this.tokenMin;
+						}
+						if(pmax == null) {
+							pmax = this.tokenMax;
+						}
+						e1 = { e : e, pmin : pmin, pmax : pmax, origin : this.origin, line : this.line};
+					}
+					var e = this.mapCompr(tmp,a[0]);
+					var e2 = hscript_ExprDef.EIdent(tmp);
+					var pmin = p1;
+					var pmax = null;
+					var e3;
+					if(e2 == null) {
+						e3 = null;
+					} else {
+						if(pmin == null) {
+							pmin = this.tokenMin;
+						}
+						if(pmax == null) {
+							pmax = this.tokenMax;
+						}
+						e3 = { e : e2, pmin : pmin, pmax : pmax, origin : this.origin, line : this.line};
+					}
+					var e2 = hscript_ExprDef.EBlock([e1,e,e3]);
+					var pmin = p1;
+					var pmax = null;
+					var e;
+					if(e2 == null) {
+						e = null;
+					} else {
+						if(pmin == null) {
+							pmin = this.tokenMin;
+						}
+						if(pmax == null) {
+							pmax = this.tokenMax;
+						}
+						e = { e : e2, pmin : pmin, pmax : pmax, origin : this.origin, line : this.line};
+					}
+					return this.parseExprNext(e);
+				case 24:
+					var _g1 = _g.cond;
+					var _g1 = _g.e;
+					var tmp = "__a_" + this.uid++;
+					var e = hscript_ExprDef.EArrayDecl([]);
+					var pmin = p1;
+					var pmax = null;
+					var e1;
+					if(e == null) {
+						e1 = null;
+					} else {
+						if(pmin == null) {
+							pmin = this.tokenMin;
+						}
+						if(pmax == null) {
+							pmax = this.tokenMax;
+						}
+						e1 = { e : e, pmin : pmin, pmax : pmax, origin : this.origin, line : this.line};
+					}
+					var e = hscript_ExprDef.EVar(tmp,null,e1);
+					var pmin = p1;
+					var pmax = null;
+					var e1;
+					if(e == null) {
+						e1 = null;
+					} else {
+						if(pmin == null) {
+							pmin = this.tokenMin;
+						}
+						if(pmax == null) {
+							pmax = this.tokenMax;
+						}
+						e1 = { e : e, pmin : pmin, pmax : pmax, origin : this.origin, line : this.line};
+					}
+					var e = this.mapCompr(tmp,a[0]);
+					var e2 = hscript_ExprDef.EIdent(tmp);
+					var pmin = p1;
+					var pmax = null;
+					var e3;
+					if(e2 == null) {
+						e3 = null;
+					} else {
+						if(pmin == null) {
+							pmin = this.tokenMin;
+						}
+						if(pmax == null) {
+							pmax = this.tokenMax;
+						}
+						e3 = { e : e2, pmin : pmin, pmax : pmax, origin : this.origin, line : this.line};
+					}
+					var e2 = hscript_ExprDef.EBlock([e1,e,e3]);
+					var pmin = p1;
+					var pmax = null;
+					var e;
+					if(e2 == null) {
+						e = null;
+					} else {
+						if(pmin == null) {
+							pmin = this.tokenMin;
+						}
+						if(pmax == null) {
+							pmax = this.tokenMax;
+						}
+						e = { e : e2, pmin : pmin, pmax : pmax, origin : this.origin, line : this.line};
+					}
+					return this.parseExprNext(e);
+				default:
+				}
+			}
+			var e = hscript_ExprDef.EArrayDecl(a);
+			var pmin = p1;
+			var pmax = null;
+			var tmp;
+			if(e == null) {
+				tmp = null;
+			} else {
+				if(pmin == null) {
+					pmin = this.tokenMin;
+				}
+				if(pmax == null) {
+					pmax = this.tokenMax;
+				}
+				tmp = { e : e, pmin : pmin, pmax : pmax, origin : this.origin, line : this.line};
+			}
+			return this.parseExprNext(tmp);
+		case 16:
+			var id = tk.s;
+			if(this.allowMetadata) {
+				var args = this.parseMetaArgs();
+				var e = hscript_ExprDef.EMeta(id,args,this.parseExpr());
+				var pmin = p1;
+				var pmax = null;
+				if(e == null) {
+					return null;
+				} else {
+					if(pmin == null) {
+						pmin = this.tokenMin;
+					}
+					if(pmax == null) {
+						pmax = this.tokenMax;
+					}
+					return { e : e, pmin : pmin, pmax : pmax, origin : this.origin, line : this.line};
+				}
+			} else {
+				return this.unexpected(tk);
+			}
+			break;
+		default:
+			return this.unexpected(tk);
+		}
+	}
+	,parseLambda: function(args,pmin) {
+		_hx_loop1: while(true) {
+			var id = this.getIdent();
+			var t = this.maybe(hscript_Token.TDoubleDot) ? this.parseType() : null;
+			args.push({ name : id, t : t});
+			var tk = this.token();
+			switch(tk._hx_index) {
+			case 5:
+				break _hx_loop1;
+			case 10:
+				break;
+			default:
+				this.unexpected(tk);
+				break _hx_loop1;
+			}
+		}
+		var t = this.token();
+		if(!Type.enumEq(t,hscript_Token.TOp("->"))) {
+			this.unexpected(t);
+		}
+		var eret = this.parseExpr();
+		var e = hscript_ExprDef.EReturn(eret);
+		var pmin1 = pmin;
+		var pmax = null;
+		var e1;
+		if(e == null) {
+			e1 = null;
+		} else {
+			if(pmin1 == null) {
+				pmin1 = this.tokenMin;
+			}
+			if(pmax == null) {
+				pmax = this.tokenMax;
+			}
+			e1 = { e : e, pmin : pmin1, pmax : pmax, origin : this.origin, line : this.line};
+		}
+		var e = hscript_ExprDef.EFunction(args,e1);
+		var pmin1 = pmin;
+		var pmax = null;
+		if(e == null) {
+			return null;
+		} else {
+			if(pmin1 == null) {
+				pmin1 = this.tokenMin;
+			}
+			if(pmax == null) {
+				pmax = this.tokenMax;
+			}
+			return { e : e, pmin : pmin1, pmax : pmax, origin : this.origin, line : this.line};
+		}
+	}
+	,parseMetaArgs: function() {
+		var tk = this.token();
+		if(tk != hscript_Token.TPOpen) {
+			this.tokens.push({ t : tk, min : this.tokenMin, max : this.tokenMax});
+			this.tokenMin = this.oldTokenMin;
+			this.tokenMax = this.oldTokenMax;
+			return null;
+		}
+		var args = [];
+		tk = this.token();
+		if(tk != hscript_Token.TPClose) {
+			this.tokens.push({ t : tk, min : this.tokenMin, max : this.tokenMax});
+			this.tokenMin = this.oldTokenMin;
+			this.tokenMax = this.oldTokenMax;
+			_hx_loop1: while(true) {
+				args.push(this.parseExpr());
+				var _g = this.token();
+				switch(_g._hx_index) {
+				case 5:
+					break _hx_loop1;
+				case 10:
+					break;
+				default:
+					var tk = _g;
+					this.unexpected(tk);
+				}
+			}
+		}
+		return args;
+	}
+	,mapCompr: function(tmp,e) {
+		if(e == null) {
+			return null;
+		}
+		var edef;
+		var _g = e.e;
+		switch(_g._hx_index) {
+		case 3:
+			var e2 = _g.e;
+			edef = hscript_ExprDef.EParent(this.mapCompr(tmp,e2));
+			break;
+		case 4:
+			var _g1 = _g.e;
+			if(_g1.length == 1) {
+				var e1 = _g1[0];
+				edef = hscript_ExprDef.EBlock([this.mapCompr(tmp,e1)]);
+			} else {
+				var e1 = hscript_ExprDef.EIdent(tmp);
+				var pmin = e == null ? 0 : e.pmin;
+				var pmax = e == null ? 0 : e.pmax;
+				var e2;
+				if(e1 == null) {
+					e2 = null;
+				} else {
+					if(pmin == null) {
+						pmin = this.tokenMin;
+					}
+					if(pmax == null) {
+						pmax = this.tokenMax;
+					}
+					e2 = { e : e1, pmin : pmin, pmax : pmax, origin : this.origin, line : this.line};
+				}
+				var e1 = hscript_ExprDef.EField(e2,"push");
+				var pmin = e == null ? 0 : e.pmin;
+				var pmax = e == null ? 0 : e.pmax;
+				var edef1;
+				if(e1 == null) {
+					edef1 = null;
+				} else {
+					if(pmin == null) {
+						pmin = this.tokenMin;
+					}
+					if(pmax == null) {
+						pmax = this.tokenMax;
+					}
+					edef1 = { e : e1, pmin : pmin, pmax : pmax, origin : this.origin, line : this.line};
+				}
+				edef = hscript_ExprDef.ECall(edef1,[e]);
+			}
+			break;
+		case 9:
+			var cond = _g.cond;
+			var e1 = _g.e1;
+			var e2 = _g.e2;
+			if(e2 == null) {
+				edef = hscript_ExprDef.EIf(cond,this.mapCompr(tmp,e1),null);
+			} else {
+				var e1 = hscript_ExprDef.EIdent(tmp);
+				var pmin = e == null ? 0 : e.pmin;
+				var pmax = e == null ? 0 : e.pmax;
+				var e2;
+				if(e1 == null) {
+					e2 = null;
+				} else {
+					if(pmin == null) {
+						pmin = this.tokenMin;
+					}
+					if(pmax == null) {
+						pmax = this.tokenMax;
+					}
+					e2 = { e : e1, pmin : pmin, pmax : pmax, origin : this.origin, line : this.line};
+				}
+				var e1 = hscript_ExprDef.EField(e2,"push");
+				var pmin = e == null ? 0 : e.pmin;
+				var pmax = e == null ? 0 : e.pmax;
+				var edef1;
+				if(e1 == null) {
+					edef1 = null;
+				} else {
+					if(pmin == null) {
+						pmin = this.tokenMin;
+					}
+					if(pmax == null) {
+						pmax = this.tokenMax;
+					}
+					edef1 = { e : e1, pmin : pmin, pmax : pmax, origin : this.origin, line : this.line};
+				}
+				edef = hscript_ExprDef.ECall(edef1,[e]);
+			}
+			break;
+		case 10:
+			var cond = _g.cond;
+			var e2 = _g.e;
+			edef = hscript_ExprDef.EWhile(cond,this.mapCompr(tmp,e2));
+			break;
+		case 11:
+			var v = _g.v;
+			var it = _g.it;
+			var e2 = _g.e;
+			edef = hscript_ExprDef.EFor(v,it,this.mapCompr(tmp,e2));
+			break;
+		case 24:
+			var cond = _g.cond;
+			var e2 = _g.e;
+			edef = hscript_ExprDef.EDoWhile(cond,this.mapCompr(tmp,e2));
+			break;
+		default:
+			var e1 = hscript_ExprDef.EIdent(tmp);
+			var pmin = e == null ? 0 : e.pmin;
+			var pmax = e == null ? 0 : e.pmax;
+			var e2;
+			if(e1 == null) {
+				e2 = null;
+			} else {
+				if(pmin == null) {
+					pmin = this.tokenMin;
+				}
+				if(pmax == null) {
+					pmax = this.tokenMax;
+				}
+				e2 = { e : e1, pmin : pmin, pmax : pmax, origin : this.origin, line : this.line};
+			}
+			var e1 = hscript_ExprDef.EField(e2,"push");
+			var pmin = e == null ? 0 : e.pmin;
+			var pmax = e == null ? 0 : e.pmax;
+			var edef1;
+			if(e1 == null) {
+				edef1 = null;
+			} else {
+				if(pmin == null) {
+					pmin = this.tokenMin;
+				}
+				if(pmax == null) {
+					pmax = this.tokenMax;
+				}
+				edef1 = { e : e1, pmin : pmin, pmax : pmax, origin : this.origin, line : this.line};
+			}
+			edef = hscript_ExprDef.ECall(edef1,[e]);
+		}
+		var pmin = e == null ? 0 : e.pmin;
+		var pmax = e == null ? 0 : e.pmax;
+		if(edef == null) {
+			return null;
+		} else {
+			if(pmin == null) {
+				pmin = this.tokenMin;
+			}
+			if(pmax == null) {
+				pmax = this.tokenMax;
+			}
+			return { e : edef, pmin : pmin, pmax : pmax, origin : this.origin, line : this.line};
+		}
+	}
+	,makeUnop: function(op,e) {
+		if(e == null && this.resumeErrors) {
+			return null;
+		}
+		var _g = e.e;
+		switch(_g._hx_index) {
+		case 6:
+			var bop = _g.op;
+			var e1 = _g.e1;
+			var e2 = _g.e2;
+			var e3 = hscript_ExprDef.EBinop(bop,this.makeUnop(op,e1),e2);
+			var pmin = e1 == null ? 0 : e1.pmin;
+			var pmax = e2 == null ? 0 : e2.pmax;
+			if(e3 == null) {
+				return null;
+			} else {
+				if(pmin == null) {
+					pmin = this.tokenMin;
+				}
+				if(pmax == null) {
+					pmax = this.tokenMax;
+				}
+				return { e : e3, pmin : pmin, pmax : pmax, origin : this.origin, line : this.line};
+			}
+			break;
+		case 22:
+			var e1 = _g.cond;
+			var e2 = _g.e1;
+			var e3 = _g.e2;
+			var e4 = hscript_ExprDef.ETernary(this.makeUnop(op,e1),e2,e3);
+			var pmin = e1 == null ? 0 : e1.pmin;
+			var pmax = e3 == null ? 0 : e3.pmax;
+			if(e4 == null) {
+				return null;
+			} else {
+				if(pmin == null) {
+					pmin = this.tokenMin;
+				}
+				if(pmax == null) {
+					pmax = this.tokenMax;
+				}
+				return { e : e4, pmin : pmin, pmax : pmax, origin : this.origin, line : this.line};
+			}
+			break;
+		default:
+			var e1 = hscript_ExprDef.EUnop(op,true,e);
+			var pmin = e == null ? 0 : e.pmin;
+			var pmax = e == null ? 0 : e.pmax;
+			if(e1 == null) {
+				return null;
+			} else {
+				if(pmin == null) {
+					pmin = this.tokenMin;
+				}
+				if(pmax == null) {
+					pmax = this.tokenMax;
+				}
+				return { e : e1, pmin : pmin, pmax : pmax, origin : this.origin, line : this.line};
+			}
+		}
+	}
+	,makeBinop: function(op,e1,e) {
+		if(e == null && this.resumeErrors) {
+			var e2 = hscript_ExprDef.EBinop(op,e1,e);
+			var pmin = e1 == null ? 0 : e1.pmin;
+			var pmax = e1 == null ? 0 : e1.pmax;
+			if(e2 == null) {
+				return null;
+			} else {
+				if(pmin == null) {
+					pmin = this.tokenMin;
+				}
+				if(pmax == null) {
+					pmax = this.tokenMax;
+				}
+				return { e : e2, pmin : pmin, pmax : pmax, origin : this.origin, line : this.line};
+			}
+		}
+		var _g = e.e;
+		switch(_g._hx_index) {
+		case 6:
+			var op2 = _g.op;
+			var e2 = _g.e1;
+			var e3 = _g.e2;
+			if(this.opPriority.h[op] <= this.opPriority.h[op2] && !Object.prototype.hasOwnProperty.call(this.opRightAssoc.h,op)) {
+				var e4 = hscript_ExprDef.EBinop(op2,this.makeBinop(op,e1,e2),e3);
+				var pmin = e1 == null ? 0 : e1.pmin;
+				var pmax = e3 == null ? 0 : e3.pmax;
+				if(e4 == null) {
+					return null;
+				} else {
+					if(pmin == null) {
+						pmin = this.tokenMin;
+					}
+					if(pmax == null) {
+						pmax = this.tokenMax;
+					}
+					return { e : e4, pmin : pmin, pmax : pmax, origin : this.origin, line : this.line};
+				}
+			} else {
+				var e2 = hscript_ExprDef.EBinop(op,e1,e);
+				var pmin = e1 == null ? 0 : e1.pmin;
+				var pmax = e == null ? 0 : e.pmax;
+				if(e2 == null) {
+					return null;
+				} else {
+					if(pmin == null) {
+						pmin = this.tokenMin;
+					}
+					if(pmax == null) {
+						pmax = this.tokenMax;
+					}
+					return { e : e2, pmin : pmin, pmax : pmax, origin : this.origin, line : this.line};
+				}
+			}
+			break;
+		case 22:
+			var e2 = _g.cond;
+			var e3 = _g.e1;
+			var e4 = _g.e2;
+			if(Object.prototype.hasOwnProperty.call(this.opRightAssoc.h,op)) {
+				var e5 = hscript_ExprDef.EBinop(op,e1,e);
+				var pmin = e1 == null ? 0 : e1.pmin;
+				var pmax = e == null ? 0 : e.pmax;
+				if(e5 == null) {
+					return null;
+				} else {
+					if(pmin == null) {
+						pmin = this.tokenMin;
+					}
+					if(pmax == null) {
+						pmax = this.tokenMax;
+					}
+					return { e : e5, pmin : pmin, pmax : pmax, origin : this.origin, line : this.line};
+				}
+			} else {
+				var e5 = hscript_ExprDef.ETernary(this.makeBinop(op,e1,e2),e3,e4);
+				var pmin = e1 == null ? 0 : e1.pmin;
+				var pmax = e == null ? 0 : e.pmax;
+				if(e5 == null) {
+					return null;
+				} else {
+					if(pmin == null) {
+						pmin = this.tokenMin;
+					}
+					if(pmax == null) {
+						pmax = this.tokenMax;
+					}
+					return { e : e5, pmin : pmin, pmax : pmax, origin : this.origin, line : this.line};
+				}
+			}
+			break;
+		default:
+			var e2 = hscript_ExprDef.EBinop(op,e1,e);
+			var pmin = e1 == null ? 0 : e1.pmin;
+			var pmax = e == null ? 0 : e.pmax;
+			if(e2 == null) {
+				return null;
+			} else {
+				if(pmin == null) {
+					pmin = this.tokenMin;
+				}
+				if(pmax == null) {
+					pmax = this.tokenMax;
+				}
+				return { e : e2, pmin : pmin, pmax : pmax, origin : this.origin, line : this.line};
+			}
+		}
+	}
+	,parseStructure: function(id) {
+		var p1 = this.tokenMin;
+		switch(id) {
+		case "break":
+			var e = hscript_ExprDef.EBreak;
+			var pmin = null;
+			var pmax = null;
+			if(e == null) {
+				return null;
+			} else {
+				if(pmin == null) {
+					pmin = this.tokenMin;
+				}
+				if(pmax == null) {
+					pmax = this.tokenMax;
+				}
+				return { e : e, pmin : pmin, pmax : pmax, origin : this.origin, line : this.line};
+			}
+			break;
+		case "continue":
+			var e = hscript_ExprDef.EContinue;
+			var pmin = null;
+			var pmax = null;
+			if(e == null) {
+				return null;
+			} else {
+				if(pmin == null) {
+					pmin = this.tokenMin;
+				}
+				if(pmax == null) {
+					pmax = this.tokenMax;
+				}
+				return { e : e, pmin : pmin, pmax : pmax, origin : this.origin, line : this.line};
+			}
+			break;
+		case "do":
+			var e = this.parseExpr();
+			var tk = this.token();
+			if(tk._hx_index == 2) {
+				if(tk.s != "while") {
+					this.unexpected(tk);
+				}
+			} else {
+				this.unexpected(tk);
+			}
+			var econd = this.parseExpr();
+			var e1 = hscript_ExprDef.EDoWhile(econd,e);
+			var pmin = p1;
+			var pmax = econd == null ? 0 : econd.pmax;
+			if(e1 == null) {
+				return null;
+			} else {
+				if(pmin == null) {
+					pmin = this.tokenMin;
+				}
+				if(pmax == null) {
+					pmax = this.tokenMax;
+				}
+				return { e : e1, pmin : pmin, pmax : pmax, origin : this.origin, line : this.line};
+			}
+			break;
+		case "else":
+			return this.unexpected(hscript_Token.TId(id));
+		case "for":
+			var t = this.token();
+			if(t != hscript_Token.TPOpen) {
+				this.unexpected(t);
+			}
+			var vname = this.getIdent();
+			var t = this.token();
+			if(!Type.enumEq(t,hscript_Token.TId("in"))) {
+				this.unexpected(t);
+			}
+			var eiter = this.parseExpr();
+			var t = this.token();
+			if(t != hscript_Token.TPClose) {
+				this.unexpected(t);
+			}
+			var e = this.parseExpr();
+			var e1 = hscript_ExprDef.EFor(vname,eiter,e);
+			var pmin = p1;
+			var pmax = e == null ? 0 : e.pmax;
+			if(e1 == null) {
+				return null;
+			} else {
+				if(pmin == null) {
+					pmin = this.tokenMin;
+				}
+				if(pmax == null) {
+					pmax = this.tokenMax;
+				}
+				return { e : e1, pmin : pmin, pmax : pmax, origin : this.origin, line : this.line};
+			}
+			break;
+		case "function":
+			var tk = this.token();
+			var name = null;
+			if(tk._hx_index == 2) {
+				var id = tk.s;
+				name = id;
+			} else {
+				this.tokens.push({ t : tk, min : this.tokenMin, max : this.tokenMax});
+				this.tokenMin = this.oldTokenMin;
+				this.tokenMax = this.oldTokenMax;
+			}
+			var inf = this.parseFunctionDecl();
+			var e = hscript_ExprDef.EFunction(inf.args,inf.body,name,inf.ret);
+			var pmin = p1;
+			var e1 = inf.body;
+			var pmax = e1 == null ? 0 : e1.pmax;
+			if(e == null) {
+				return null;
+			} else {
+				if(pmin == null) {
+					pmin = this.tokenMin;
+				}
+				if(pmax == null) {
+					pmax = this.tokenMax;
+				}
+				return { e : e, pmin : pmin, pmax : pmax, origin : this.origin, line : this.line};
+			}
+			break;
+		case "if":
+			var t = this.token();
+			if(t != hscript_Token.TPOpen) {
+				this.unexpected(t);
+			}
+			var cond = this.parseExpr();
+			var t = this.token();
+			if(t != hscript_Token.TPClose) {
+				this.unexpected(t);
+			}
+			var e1 = this.parseExpr();
+			var e2 = null;
+			var semic = false;
+			var tk = this.token();
+			if(tk == hscript_Token.TSemicolon) {
+				semic = true;
+				tk = this.token();
+			}
+			if(Type.enumEq(tk,hscript_Token.TId("else"))) {
+				e2 = this.parseExpr();
+			} else {
+				this.tokens.push({ t : tk, min : this.tokenMin, max : this.tokenMax});
+				this.tokenMin = this.oldTokenMin;
+				this.tokenMax = this.oldTokenMax;
+				if(semic) {
+					this.tokens.push({ t : hscript_Token.TSemicolon, min : this.tokenMin, max : this.tokenMax});
+					this.tokenMin = this.oldTokenMin;
+					this.tokenMax = this.oldTokenMax;
+				}
+			}
+			var e = hscript_ExprDef.EIf(cond,e1,e2);
+			var pmin = p1;
+			var pmax = e2 == null ? this.tokenMax : e2 == null ? 0 : e2.pmax;
+			if(e == null) {
+				return null;
+			} else {
+				if(pmin == null) {
+					pmin = this.tokenMin;
+				}
+				if(pmax == null) {
+					pmax = this.tokenMax;
+				}
+				return { e : e, pmin : pmin, pmax : pmax, origin : this.origin, line : this.line};
+			}
+			break;
+		case "inline":
+			if(!this.maybe(hscript_Token.TId("function"))) {
+				this.unexpected(hscript_Token.TId("inline"));
+			}
+			return this.parseStructure("function");
+		case "new":
+			var a = [];
+			a.push(this.getIdent());
+			_hx_loop1: while(true) {
+				var tk = this.token();
+				switch(tk._hx_index) {
+				case 4:
+					break _hx_loop1;
+				case 8:
+					a.push(this.getIdent());
+					break;
+				default:
+					this.unexpected(tk);
+					break _hx_loop1;
+				}
+			}
+			var args = this.parseExprList(hscript_Token.TPClose);
+			var e = hscript_ExprDef.ENew(a.join("."),args);
+			var pmin = p1;
+			var pmax = null;
+			if(e == null) {
+				return null;
+			} else {
+				if(pmin == null) {
+					pmin = this.tokenMin;
+				}
+				if(pmax == null) {
+					pmax = this.tokenMax;
+				}
+				return { e : e, pmin : pmin, pmax : pmax, origin : this.origin, line : this.line};
+			}
+			break;
+		case "return":
+			var tk = this.token();
+			this.tokens.push({ t : tk, min : this.tokenMin, max : this.tokenMax});
+			this.tokenMin = this.oldTokenMin;
+			this.tokenMax = this.oldTokenMax;
+			var e = tk == hscript_Token.TSemicolon ? null : this.parseExpr();
+			var e1 = hscript_ExprDef.EReturn(e);
+			var pmin = p1;
+			var pmax = e == null ? this.tokenMax : e == null ? 0 : e.pmax;
+			if(e1 == null) {
+				return null;
+			} else {
+				if(pmin == null) {
+					pmin = this.tokenMin;
+				}
+				if(pmax == null) {
+					pmax = this.tokenMax;
+				}
+				return { e : e1, pmin : pmin, pmax : pmax, origin : this.origin, line : this.line};
+			}
+			break;
+		case "switch":
+			var e = this.parseExpr();
+			var def = null;
+			var cases = [];
+			var t = this.token();
+			if(t != hscript_Token.TBrOpen) {
+				this.unexpected(t);
+			}
+			_hx_loop2: while(true) {
+				var tk = this.token();
+				switch(tk._hx_index) {
+				case 2:
+					switch(tk.s) {
+					case "case":
+						var c = { values : [], expr : null};
+						cases.push(c);
+						_hx_loop3: while(true) {
+							var e1 = this.parseExpr();
+							c.values.push(e1);
+							tk = this.token();
+							switch(tk._hx_index) {
+							case 10:
+								break;
+							case 15:
+								break _hx_loop3;
+							default:
+								this.unexpected(tk);
+								break _hx_loop3;
+							}
+						}
+						var exprs = [];
+						_hx_loop4: while(true) {
+							tk = this.token();
+							this.tokens.push({ t : tk, min : this.tokenMin, max : this.tokenMax});
+							this.tokenMin = this.oldTokenMin;
+							this.tokenMax = this.oldTokenMax;
+							switch(tk._hx_index) {
+							case 0:
+								if(this.resumeErrors) {
+									break _hx_loop4;
+								} else {
+									this.parseFullExpr(exprs);
+								}
+								break;
+							case 2:
+								switch(tk.s) {
+								case "case":case "default":
+									break _hx_loop4;
+								default:
+									this.parseFullExpr(exprs);
+								}
+								break;
+							case 7:
+								break _hx_loop4;
+							default:
+								this.parseFullExpr(exprs);
+							}
+						}
+						var tmp;
+						if(exprs.length == 1) {
+							tmp = exprs[0];
+						} else if(exprs.length == 0) {
+							var e2 = hscript_ExprDef.EBlock([]);
+							var pmin = this.tokenMin;
+							var pmax = this.tokenMin;
+							if(e2 == null) {
+								tmp = null;
+							} else {
+								if(pmin == null) {
+									pmin = this.tokenMin;
+								}
+								if(pmax == null) {
+									pmax = this.tokenMax;
+								}
+								tmp = { e : e2, pmin : pmin, pmax : pmax, origin : this.origin, line : this.line};
+							}
+						} else {
+							var e3 = hscript_ExprDef.EBlock(exprs);
+							var e4 = exprs[0];
+							var pmin1 = e4 == null ? 0 : e4.pmin;
+							var e5 = exprs[exprs.length - 1];
+							var pmax1 = e5 == null ? 0 : e5.pmax;
+							if(e3 == null) {
+								tmp = null;
+							} else {
+								if(pmin1 == null) {
+									pmin1 = this.tokenMin;
+								}
+								if(pmax1 == null) {
+									pmax1 = this.tokenMax;
+								}
+								tmp = { e : e3, pmin : pmin1, pmax : pmax1, origin : this.origin, line : this.line};
+							}
+						}
+						c.expr = tmp;
+						break;
+					case "default":
+						if(def != null) {
+							this.unexpected(tk);
+						}
+						var t = this.token();
+						if(t != hscript_Token.TDoubleDot) {
+							this.unexpected(t);
+						}
+						var exprs1 = [];
+						_hx_loop5: while(true) {
+							tk = this.token();
+							this.tokens.push({ t : tk, min : this.tokenMin, max : this.tokenMax});
+							this.tokenMin = this.oldTokenMin;
+							this.tokenMax = this.oldTokenMax;
+							switch(tk._hx_index) {
+							case 0:
+								if(this.resumeErrors) {
+									break _hx_loop5;
+								} else {
+									this.parseFullExpr(exprs1);
+								}
+								break;
+							case 2:
+								switch(tk.s) {
+								case "case":case "default":
+									break _hx_loop5;
+								default:
+									this.parseFullExpr(exprs1);
+								}
+								break;
+							case 7:
+								break _hx_loop5;
+							default:
+								this.parseFullExpr(exprs1);
+							}
+						}
+						if(exprs1.length == 1) {
+							def = exprs1[0];
+						} else if(exprs1.length == 0) {
+							var e6 = hscript_ExprDef.EBlock([]);
+							var pmin2 = this.tokenMin;
+							var pmax2 = this.tokenMin;
+							if(e6 == null) {
+								def = null;
+							} else {
+								if(pmin2 == null) {
+									pmin2 = this.tokenMin;
+								}
+								if(pmax2 == null) {
+									pmax2 = this.tokenMax;
+								}
+								def = { e : e6, pmin : pmin2, pmax : pmax2, origin : this.origin, line : this.line};
+							}
+						} else {
+							var e7 = hscript_ExprDef.EBlock(exprs1);
+							var e8 = exprs1[0];
+							var pmin3 = e8 == null ? 0 : e8.pmin;
+							var e9 = exprs1[exprs1.length - 1];
+							var pmax3 = e9 == null ? 0 : e9.pmax;
+							if(e7 == null) {
+								def = null;
+							} else {
+								if(pmin3 == null) {
+									pmin3 = this.tokenMin;
+								}
+								if(pmax3 == null) {
+									pmax3 = this.tokenMax;
+								}
+								def = { e : e7, pmin : pmin3, pmax : pmax3, origin : this.origin, line : this.line};
+							}
+						}
+						break;
+					default:
+						this.unexpected(tk);
+						break _hx_loop2;
+					}
+					break;
+				case 7:
+					break _hx_loop2;
+				default:
+					this.unexpected(tk);
+					break _hx_loop2;
+				}
+			}
+			var e1 = hscript_ExprDef.ESwitch(e,cases,def);
+			var pmin = p1;
+			var pmax = this.tokenMax;
+			if(e1 == null) {
+				return null;
+			} else {
+				if(pmin == null) {
+					pmin = this.tokenMin;
+				}
+				if(pmax == null) {
+					pmax = this.tokenMax;
+				}
+				return { e : e1, pmin : pmin, pmax : pmax, origin : this.origin, line : this.line};
+			}
+			break;
+		case "throw":
+			var e = this.parseExpr();
+			var e1 = hscript_ExprDef.EThrow(e);
+			var pmin = p1;
+			var pmax = e == null ? 0 : e.pmax;
+			if(e1 == null) {
+				return null;
+			} else {
+				if(pmin == null) {
+					pmin = this.tokenMin;
+				}
+				if(pmax == null) {
+					pmax = this.tokenMax;
+				}
+				return { e : e1, pmin : pmin, pmax : pmax, origin : this.origin, line : this.line};
+			}
+			break;
+		case "try":
+			var e = this.parseExpr();
+			var t = this.token();
+			if(!Type.enumEq(t,hscript_Token.TId("catch"))) {
+				this.unexpected(t);
+			}
+			var t = this.token();
+			if(t != hscript_Token.TPOpen) {
+				this.unexpected(t);
+			}
+			var vname = this.getIdent();
+			var t = this.token();
+			if(t != hscript_Token.TDoubleDot) {
+				this.unexpected(t);
+			}
+			var t = null;
+			if(this.allowTypes) {
+				t = this.parseType();
+			} else {
+				var t1 = this.token();
+				if(!Type.enumEq(t1,hscript_Token.TId("Dynamic"))) {
+					this.unexpected(t1);
+				}
+			}
+			var t1 = this.token();
+			if(t1 != hscript_Token.TPClose) {
+				this.unexpected(t1);
+			}
+			var ec = this.parseExpr();
+			var e1 = hscript_ExprDef.ETry(e,vname,t,ec);
+			var pmin = p1;
+			var pmax = ec == null ? 0 : ec.pmax;
+			if(e1 == null) {
+				return null;
+			} else {
+				if(pmin == null) {
+					pmin = this.tokenMin;
+				}
+				if(pmax == null) {
+					pmax = this.tokenMax;
+				}
+				return { e : e1, pmin : pmin, pmax : pmax, origin : this.origin, line : this.line};
+			}
+			break;
+		case "var":
+			var ident = this.getIdent();
+			var tk = this.token();
+			var t = null;
+			if(tk == hscript_Token.TDoubleDot && this.allowTypes) {
+				t = this.parseType();
+				tk = this.token();
+			}
+			var e = null;
+			switch(tk._hx_index) {
+			case 3:
+				if(tk.s == "=") {
+					e = this.parseExpr();
+				} else {
+					this.unexpected(tk);
+				}
+				break;
+			case 10:case 11:
+				this.tokens.push({ t : tk, min : this.tokenMin, max : this.tokenMax});
+				this.tokenMin = this.oldTokenMin;
+				this.tokenMax = this.oldTokenMax;
+				break;
+			default:
+				if(t != null) {
+					this.tokens.push({ t : tk, min : this.tokenMin, max : this.tokenMax});
+					this.tokenMin = this.oldTokenMin;
+					this.tokenMax = this.oldTokenMax;
+				} else {
+					this.unexpected(tk);
+				}
+			}
+			var e1 = hscript_ExprDef.EVar(ident,t,e);
+			var pmin = p1;
+			var pmax = e == null ? this.tokenMax : e == null ? 0 : e.pmax;
+			if(e1 == null) {
+				return null;
+			} else {
+				if(pmin == null) {
+					pmin = this.tokenMin;
+				}
+				if(pmax == null) {
+					pmax = this.tokenMax;
+				}
+				return { e : e1, pmin : pmin, pmax : pmax, origin : this.origin, line : this.line};
+			}
+			break;
+		case "while":
+			var econd = this.parseExpr();
+			var e = this.parseExpr();
+			var e1 = hscript_ExprDef.EWhile(econd,e);
+			var pmin = p1;
+			var pmax = e == null ? 0 : e.pmax;
+			if(e1 == null) {
+				return null;
+			} else {
+				if(pmin == null) {
+					pmin = this.tokenMin;
+				}
+				if(pmax == null) {
+					pmax = this.tokenMax;
+				}
+				return { e : e1, pmin : pmin, pmax : pmax, origin : this.origin, line : this.line};
+			}
+			break;
+		default:
+			return null;
+		}
+	}
+	,parseExprNext: function(e1) {
+		var tk = this.token();
+		switch(tk._hx_index) {
+		case 2:
+			var op = tk.s;
+			if(op == "is") {
+				return this.makeBinop(op,e1,this.parseExpr());
+			} else {
+				this.tokens.push({ t : tk, min : this.tokenMin, max : this.tokenMax});
+				this.tokenMin = this.oldTokenMin;
+				this.tokenMax = this.oldTokenMax;
+				return e1;
+			}
+			break;
+		case 3:
+			var op = tk.s;
+			if(op == "->") {
+				var _g = e1.e;
+				switch(_g._hx_index) {
+				case 1:
+					var i = _g.v;
+					var eret = this.parseExpr();
+					var e = hscript_ExprDef.EReturn(eret);
+					var pmin = eret == null ? 0 : eret.pmin;
+					var pmax = null;
+					var e2;
+					if(e == null) {
+						e2 = null;
+					} else {
+						if(pmin == null) {
+							pmin = this.tokenMin;
+						}
+						if(pmax == null) {
+							pmax = this.tokenMax;
+						}
+						e2 = { e : e, pmin : pmin, pmax : pmax, origin : this.origin, line : this.line};
+					}
+					var e = hscript_ExprDef.EFunction([{ name : i}],e2);
+					var pmin = e1 == null ? 0 : e1.pmin;
+					var pmax = null;
+					if(e == null) {
+						return null;
+					} else {
+						if(pmin == null) {
+							pmin = this.tokenMin;
+						}
+						if(pmax == null) {
+							pmax = this.tokenMax;
+						}
+						return { e : e, pmin : pmin, pmax : pmax, origin : this.origin, line : this.line};
+					}
+					break;
+				case 3:
+					var _hx_tmp = _g.e.e;
+					if(_hx_tmp._hx_index == 1) {
+						var i = _hx_tmp.v;
+						var eret = this.parseExpr();
+						var e = hscript_ExprDef.EReturn(eret);
+						var pmin = eret == null ? 0 : eret.pmin;
+						var pmax = null;
+						var e2;
+						if(e == null) {
+							e2 = null;
+						} else {
+							if(pmin == null) {
+								pmin = this.tokenMin;
+							}
+							if(pmax == null) {
+								pmax = this.tokenMax;
+							}
+							e2 = { e : e, pmin : pmin, pmax : pmax, origin : this.origin, line : this.line};
+						}
+						var e = hscript_ExprDef.EFunction([{ name : i}],e2);
+						var pmin = e1 == null ? 0 : e1.pmin;
+						var pmax = null;
+						if(e == null) {
+							return null;
+						} else {
+							if(pmin == null) {
+								pmin = this.tokenMin;
+							}
+							if(pmax == null) {
+								pmax = this.tokenMax;
+							}
+							return { e : e, pmin : pmin, pmax : pmax, origin : this.origin, line : this.line};
+						}
+					}
+					break;
+				case 26:
+					var _hx_tmp = _g.e.e;
+					if(_hx_tmp._hx_index == 1) {
+						var i = _hx_tmp.v;
+						var t = _g.t;
+						var eret = this.parseExpr();
+						var e = hscript_ExprDef.EReturn(eret);
+						var pmin = eret == null ? 0 : eret.pmin;
+						var pmax = null;
+						var e2;
+						if(e == null) {
+							e2 = null;
+						} else {
+							if(pmin == null) {
+								pmin = this.tokenMin;
+							}
+							if(pmax == null) {
+								pmax = this.tokenMax;
+							}
+							e2 = { e : e, pmin : pmin, pmax : pmax, origin : this.origin, line : this.line};
+						}
+						var e = hscript_ExprDef.EFunction([{ name : i, t : t}],e2);
+						var pmin = e1 == null ? 0 : e1.pmin;
+						var pmax = null;
+						if(e == null) {
+							return null;
+						} else {
+							if(pmin == null) {
+								pmin = this.tokenMin;
+							}
+							if(pmax == null) {
+								pmax = this.tokenMax;
+							}
+							return { e : e, pmin : pmin, pmax : pmax, origin : this.origin, line : this.line};
+						}
+					}
+					break;
+				default:
+				}
+				this.unexpected(tk);
+			}
+			if(this.opPriority.h[op] == -1) {
+				var tmp;
+				if(!this.isBlock(e1)) {
+					var _g = e1.e;
+					if(_g._hx_index == 3) {
+						var _g1 = _g.e;
+						tmp = true;
+					} else {
+						tmp = false;
+					}
+				} else {
+					tmp = true;
+				}
+				if(tmp) {
+					this.tokens.push({ t : tk, min : this.tokenMin, max : this.tokenMax});
+					this.tokenMin = this.oldTokenMin;
+					this.tokenMax = this.oldTokenMax;
+					return e1;
+				}
+				var e = hscript_ExprDef.EUnop(op,false,e1);
+				var pmin = e1 == null ? 0 : e1.pmin;
+				var pmax = null;
+				var tmp;
+				if(e == null) {
+					tmp = null;
+				} else {
+					if(pmin == null) {
+						pmin = this.tokenMin;
+					}
+					if(pmax == null) {
+						pmax = this.tokenMax;
+					}
+					tmp = { e : e, pmin : pmin, pmax : pmax, origin : this.origin, line : this.line};
+				}
+				return this.parseExprNext(tmp);
+			}
+			return this.makeBinop(op,e1,this.parseExpr());
+		case 4:
+			var e = hscript_ExprDef.ECall(e1,this.parseExprList(hscript_Token.TPClose));
+			var pmin = e1 == null ? 0 : e1.pmin;
+			var pmax = null;
+			var tmp;
+			if(e == null) {
+				tmp = null;
+			} else {
+				if(pmin == null) {
+					pmin = this.tokenMin;
+				}
+				if(pmax == null) {
+					pmax = this.tokenMax;
+				}
+				tmp = { e : e, pmin : pmin, pmax : pmax, origin : this.origin, line : this.line};
+			}
+			return this.parseExprNext(tmp);
+		case 8:
+			var field = this.getIdent();
+			var e = hscript_ExprDef.EField(e1,field);
+			var pmin = e1 == null ? 0 : e1.pmin;
+			var pmax = null;
+			var tmp;
+			if(e == null) {
+				tmp = null;
+			} else {
+				if(pmin == null) {
+					pmin = this.tokenMin;
+				}
+				if(pmax == null) {
+					pmax = this.tokenMax;
+				}
+				tmp = { e : e, pmin : pmin, pmax : pmax, origin : this.origin, line : this.line};
+			}
+			return this.parseExprNext(tmp);
+		case 9:
+			var field = this.getIdent();
+			var tmp = "__a_" + this.uid++;
+			var e = hscript_ExprDef.EVar(tmp,null,e1);
+			var pmin = e1 == null ? 0 : e1.pmin;
+			var pmax = e1 == null ? 0 : e1.pmax;
+			var e2;
+			if(e == null) {
+				e2 = null;
+			} else {
+				if(pmin == null) {
+					pmin = this.tokenMin;
+				}
+				if(pmax == null) {
+					pmax = this.tokenMax;
+				}
+				e2 = { e : e, pmin : pmin, pmax : pmax, origin : this.origin, line : this.line};
+			}
+			var e = hscript_ExprDef.EIdent(tmp);
+			var pmin = e1 == null ? 0 : e1.pmin;
+			var pmax = e1 == null ? 0 : e1.pmax;
+			var e3;
+			if(e == null) {
+				e3 = null;
+			} else {
+				if(pmin == null) {
+					pmin = this.tokenMin;
+				}
+				if(pmax == null) {
+					pmax = this.tokenMax;
+				}
+				e3 = { e : e, pmin : pmin, pmax : pmax, origin : this.origin, line : this.line};
+			}
+			var e = hscript_ExprDef.EIdent("null");
+			var pmin = e1 == null ? 0 : e1.pmin;
+			var pmax = e1 == null ? 0 : e1.pmax;
+			var e4;
+			if(e == null) {
+				e4 = null;
+			} else {
+				if(pmin == null) {
+					pmin = this.tokenMin;
+				}
+				if(pmax == null) {
+					pmax = this.tokenMax;
+				}
+				e4 = { e : e, pmin : pmin, pmax : pmax, origin : this.origin, line : this.line};
+			}
+			var e = hscript_ExprDef.EBinop("==",e3,e4);
+			var pmin = null;
+			var pmax = null;
+			var e3;
+			if(e == null) {
+				e3 = null;
+			} else {
+				if(pmin == null) {
+					pmin = this.tokenMin;
+				}
+				if(pmax == null) {
+					pmax = this.tokenMax;
+				}
+				e3 = { e : e, pmin : pmin, pmax : pmax, origin : this.origin, line : this.line};
+			}
+			var e = hscript_ExprDef.EIdent("null");
+			var pmin = e1 == null ? 0 : e1.pmin;
+			var pmax = e1 == null ? 0 : e1.pmax;
+			var e4;
+			if(e == null) {
+				e4 = null;
+			} else {
+				if(pmin == null) {
+					pmin = this.tokenMin;
+				}
+				if(pmax == null) {
+					pmax = this.tokenMax;
+				}
+				e4 = { e : e, pmin : pmin, pmax : pmax, origin : this.origin, line : this.line};
+			}
+			var e = hscript_ExprDef.EIdent(tmp);
+			var pmin = e1 == null ? 0 : e1.pmin;
+			var pmax = e1 == null ? 0 : e1.pmax;
+			var e5;
+			if(e == null) {
+				e5 = null;
+			} else {
+				if(pmin == null) {
+					pmin = this.tokenMin;
+				}
+				if(pmax == null) {
+					pmax = this.tokenMax;
+				}
+				e5 = { e : e, pmin : pmin, pmax : pmax, origin : this.origin, line : this.line};
+			}
+			var e = hscript_ExprDef.EField(e5,field);
+			var pmin = e1 == null ? 0 : e1.pmin;
+			var pmax = null;
+			var e5;
+			if(e == null) {
+				e5 = null;
+			} else {
+				if(pmin == null) {
+					pmin = this.tokenMin;
+				}
+				if(pmax == null) {
+					pmax = this.tokenMax;
+				}
+				e5 = { e : e, pmin : pmin, pmax : pmax, origin : this.origin, line : this.line};
+			}
+			var e = hscript_ExprDef.ETernary(e3,e4,e5);
+			var pmin = null;
+			var pmax = null;
+			var e3;
+			if(e == null) {
+				e3 = null;
+			} else {
+				if(pmin == null) {
+					pmin = this.tokenMin;
+				}
+				if(pmax == null) {
+					pmax = this.tokenMax;
+				}
+				e3 = { e : e, pmin : pmin, pmax : pmax, origin : this.origin, line : this.line};
+			}
+			var e = hscript_ExprDef.EBlock([e2,e3]);
+			var pmin = e1 == null ? 0 : e1.pmin;
+			var pmax = null;
+			var e2;
+			if(e == null) {
+				e2 = null;
+			} else {
+				if(pmin == null) {
+					pmin = this.tokenMin;
+				}
+				if(pmax == null) {
+					pmax = this.tokenMax;
+				}
+				e2 = { e : e, pmin : pmin, pmax : pmax, origin : this.origin, line : this.line};
+			}
+			return this.parseExprNext(e2);
+		case 12:
+			var e2 = this.parseExpr();
+			var t = this.token();
+			if(t != hscript_Token.TBkClose) {
+				this.unexpected(t);
+			}
+			var e = hscript_ExprDef.EArray(e1,e2);
+			var pmin = e1 == null ? 0 : e1.pmin;
+			var pmax = null;
+			var tmp;
+			if(e == null) {
+				tmp = null;
+			} else {
+				if(pmin == null) {
+					pmin = this.tokenMin;
+				}
+				if(pmax == null) {
+					pmax = this.tokenMax;
+				}
+				tmp = { e : e, pmin : pmin, pmax : pmax, origin : this.origin, line : this.line};
+			}
+			return this.parseExprNext(tmp);
+		case 14:
+			var e2 = this.parseExpr();
+			var t = this.token();
+			if(t != hscript_Token.TDoubleDot) {
+				this.unexpected(t);
+			}
+			var e3 = this.parseExpr();
+			var e = hscript_ExprDef.ETernary(e1,e2,e3);
+			var pmin = e1 == null ? 0 : e1.pmin;
+			var pmax = e3 == null ? 0 : e3.pmax;
+			if(e == null) {
+				return null;
+			} else {
+				if(pmin == null) {
+					pmin = this.tokenMin;
+				}
+				if(pmax == null) {
+					pmax = this.tokenMax;
+				}
+				return { e : e, pmin : pmin, pmax : pmax, origin : this.origin, line : this.line};
+			}
+			break;
+		default:
+			this.tokens.push({ t : tk, min : this.tokenMin, max : this.tokenMax});
+			this.tokenMin = this.oldTokenMin;
+			this.tokenMax = this.oldTokenMax;
+			return e1;
+		}
+	}
+	,parseFunctionArgs: function() {
+		var args = [];
+		var tk = this.token();
+		if(tk != hscript_Token.TPClose) {
+			var done = false;
+			while(!done) {
+				var name = null;
+				var opt = false;
+				if(tk._hx_index == 14) {
+					opt = true;
+					tk = this.token();
+				}
+				if(tk._hx_index == 2) {
+					var id = tk.s;
+					name = id;
+				} else {
+					this.unexpected(tk);
+					break;
+				}
+				var arg = { name : name};
+				args.push(arg);
+				if(opt) {
+					arg.opt = true;
+				}
+				if(this.allowTypes) {
+					if(this.maybe(hscript_Token.TDoubleDot)) {
+						arg.t = this.parseType();
+					}
+					if(this.maybe(hscript_Token.TOp("="))) {
+						arg.value = this.parseExpr();
+					}
+				}
+				tk = this.token();
+				switch(tk._hx_index) {
+				case 5:
+					done = true;
+					break;
+				case 10:
+					tk = this.token();
+					break;
+				default:
+					this.unexpected(tk);
+				}
+			}
+		}
+		return args;
+	}
+	,parseFunctionDecl: function() {
+		var t = this.token();
+		if(t != hscript_Token.TPOpen) {
+			this.unexpected(t);
+		}
+		var args = this.parseFunctionArgs();
+		var ret = null;
+		if(this.allowTypes) {
+			var tk = this.token();
+			if(tk != hscript_Token.TDoubleDot) {
+				this.tokens.push({ t : tk, min : this.tokenMin, max : this.tokenMax});
+				this.tokenMin = this.oldTokenMin;
+				this.tokenMax = this.oldTokenMax;
+			} else {
+				ret = this.parseType();
+			}
+		}
+		return { args : args, ret : ret, body : this.parseExpr()};
+	}
+	,parsePath: function() {
+		var path = [this.getIdent()];
+		while(true) {
+			var t = this.token();
+			if(t != hscript_Token.TDot) {
+				this.tokens.push({ t : t, min : this.tokenMin, max : this.tokenMax});
+				this.tokenMin = this.oldTokenMin;
+				this.tokenMax = this.oldTokenMax;
+				break;
+			}
+			path.push(this.getIdent());
+		}
+		return path;
+	}
+	,parseType: function() {
+		var _gthis = this;
+		var t = this.token();
+		switch(t._hx_index) {
+		case 2:
+			var v = t.s;
+			this.tokens.push({ t : t, min : this.tokenMin, max : this.tokenMax});
+			this.tokenMin = this.oldTokenMin;
+			this.tokenMax = this.oldTokenMax;
+			var path = this.parsePath();
+			var params = null;
+			t = this.token();
+			if(t._hx_index == 3) {
+				var op = t.s;
+				if(op == "<") {
+					params = [];
+					_hx_loop1: while(true) {
+						params.push(this.parseType());
+						t = this.token();
+						switch(t._hx_index) {
+						case 3:
+							var op = t.s;
+							if(op == ">") {
+								break _hx_loop1;
+							}
+							if(HxOverrides.cca(op,0) == 62) {
+								this.tokens.add({ t : hscript_Token.TOp(HxOverrides.substr(op,1,null)), min : this.tokenMax - op.length - 1, max : this.tokenMax});
+								break _hx_loop1;
+							}
+							break;
+						case 10:
+							continue;
+						default:
+						}
+						this.unexpected(t);
+						break;
+					}
+				} else {
+					this.tokens.push({ t : t, min : this.tokenMin, max : this.tokenMax});
+					this.tokenMin = this.oldTokenMin;
+					this.tokenMax = this.oldTokenMax;
+				}
+			} else {
+				this.tokens.push({ t : t, min : this.tokenMin, max : this.tokenMax});
+				this.tokenMin = this.oldTokenMin;
+				this.tokenMax = this.oldTokenMax;
+			}
+			return this.parseTypeNext(hscript_CType.CTPath(path,params));
+		case 4:
+			var a = this.token();
+			var b = this.token();
+			this.tokens.push({ t : b, min : this.tokenMin, max : this.tokenMax});
+			this.tokenMin = this.oldTokenMin;
+			this.tokenMax = this.oldTokenMax;
+			this.tokens.push({ t : a, min : this.tokenMin, max : this.tokenMax});
+			this.tokenMin = this.oldTokenMin;
+			this.tokenMax = this.oldTokenMax;
+			var withReturn = function(args) {
+				var _g = _gthis.token();
+				if(_g._hx_index == 3) {
+					if(_g.s != "->") {
+						var t = _g;
+						_gthis.unexpected(t);
+					}
+				} else {
+					var t = _g;
+					_gthis.unexpected(t);
+				}
+				return hscript_CType.CTFun(args,_gthis.parseType());
+			};
+			switch(a._hx_index) {
+			case 2:
+				var _g = a.s;
+				if(b._hx_index == 15) {
+					var _g = [];
+					var _g1 = 0;
+					var _g2 = this.parseFunctionArgs();
+					while(_g1 < _g2.length) {
+						var arg = _g2[_g1];
+						++_g1;
+						var _g3 = arg.value;
+						if(_g3 != null) {
+							var v = _g3;
+							if(!this.resumeErrors) {
+								throw haxe_Exception.thrown(new hscript_Error(hscript_ErrorDef.ECustom("Default values not allowed in function types"),v.pmin,v.pmax,this.origin,this.line));
+							}
+						}
+						_g.push(hscript_CType.CTNamed(arg.name,arg.opt ? hscript_CType.CTOpt(arg.t) : arg.t));
+					}
+					var args = _g;
+					return withReturn(args);
+				} else {
+					var t1 = this.parseType();
+					var _g = this.token();
+					switch(_g._hx_index) {
+					case 5:
+						return this.parseTypeNext(hscript_CType.CTParent(t1));
+					case 10:
+						var args = [t1];
+						do args.push(this.parseType()); while(this.maybe(hscript_Token.TComma));
+						var t1 = this.token();
+						if(t1 != hscript_Token.TPClose) {
+							this.unexpected(t1);
+						}
+						return withReturn(args);
+					default:
+						var t1 = _g;
+						return this.unexpected(t1);
+					}
+				}
+				break;
+			case 5:
+				var _g = [];
+				var _g1 = 0;
+				var _g2 = this.parseFunctionArgs();
+				while(_g1 < _g2.length) {
+					var arg = _g2[_g1];
+					++_g1;
+					var _g3 = arg.value;
+					if(_g3 != null) {
+						var v = _g3;
+						if(!this.resumeErrors) {
+							throw haxe_Exception.thrown(new hscript_Error(hscript_ErrorDef.ECustom("Default values not allowed in function types"),v.pmin,v.pmax,this.origin,this.line));
+						}
+					}
+					_g.push(hscript_CType.CTNamed(arg.name,arg.opt ? hscript_CType.CTOpt(arg.t) : arg.t));
+				}
+				var args = _g;
+				return withReturn(args);
+			default:
+				var t1 = this.parseType();
+				var _g = this.token();
+				switch(_g._hx_index) {
+				case 5:
+					return this.parseTypeNext(hscript_CType.CTParent(t1));
+				case 10:
+					var args = [t1];
+					do args.push(this.parseType()); while(this.maybe(hscript_Token.TComma));
+					var t1 = this.token();
+					if(t1 != hscript_Token.TPClose) {
+						this.unexpected(t1);
+					}
+					return withReturn(args);
+				default:
+					var t1 = _g;
+					return this.unexpected(t1);
+				}
+			}
+			break;
+		case 6:
+			var fields = [];
+			var meta = null;
+			_hx_loop6: while(true) {
+				t = this.token();
+				switch(t._hx_index) {
+				case 2:
+					var _g = t.s;
+					if(_g == "var") {
+						var name = this.getIdent();
+						var t1 = this.token();
+						if(t1 != hscript_Token.TDoubleDot) {
+							this.unexpected(t1);
+						}
+						fields.push({ name : name, t : this.parseType(), meta : meta});
+						meta = null;
+						var t2 = this.token();
+						if(t2 != hscript_Token.TSemicolon) {
+							this.unexpected(t2);
+						}
+					} else {
+						var name1 = _g;
+						var t3 = this.token();
+						if(t3 != hscript_Token.TDoubleDot) {
+							this.unexpected(t3);
+						}
+						fields.push({ name : name1, t : this.parseType(), meta : meta});
+						t = this.token();
+						switch(t._hx_index) {
+						case 7:
+							break _hx_loop6;
+						case 10:
+							break;
+						default:
+							this.unexpected(t);
+						}
+					}
+					break;
+				case 7:
+					break _hx_loop6;
+				case 16:
+					var name2 = t.s;
+					if(meta == null) {
+						meta = [];
+					}
+					meta.push({ name : name2, params : this.parseMetaArgs()});
+					break;
+				default:
+					this.unexpected(t);
+					break _hx_loop6;
+				}
+			}
+			return this.parseTypeNext(hscript_CType.CTAnon(fields));
+		default:
+			return this.unexpected(t);
+		}
+	}
+	,parseTypeNext: function(t) {
+		var tk = this.token();
+		if(tk._hx_index == 3) {
+			var op = tk.s;
+			if(op != "->") {
+				this.tokens.push({ t : tk, min : this.tokenMin, max : this.tokenMax});
+				this.tokenMin = this.oldTokenMin;
+				this.tokenMax = this.oldTokenMax;
+				return t;
+			}
+		} else {
+			this.tokens.push({ t : tk, min : this.tokenMin, max : this.tokenMax});
+			this.tokenMin = this.oldTokenMin;
+			this.tokenMax = this.oldTokenMax;
+			return t;
+		}
+		var t2 = this.parseType();
+		if(t2._hx_index == 1) {
+			var _g = t2.ret;
+			var args = t2.args;
+			args.unshift(t);
+			return t2;
+		} else {
+			return hscript_CType.CTFun([t],t2);
+		}
+	}
+	,parseExprList: function(etk) {
+		var args = [];
+		var tk = this.token();
+		if(tk == etk) {
+			return args;
+		}
+		this.tokens.push({ t : tk, min : this.tokenMin, max : this.tokenMax});
+		this.tokenMin = this.oldTokenMin;
+		this.tokenMax = this.oldTokenMax;
+		while(true) {
+			args.push(this.parseExpr());
+			tk = this.token();
+			if(tk._hx_index != 10) {
+				if(tk == etk) {
+					break;
+				}
+				this.unexpected(tk);
+				break;
+			}
+		}
+		return args;
+	}
+	,parseModule: function(content,origin,position) {
+		if(position == null) {
+			position = 0;
+		}
+		if(origin == null) {
+			origin = "hscript";
+		}
+		this.initParser(origin,position);
+		this.input = content;
+		this.readPos = 0;
+		this.allowTypes = true;
+		this.allowMetadata = true;
+		var decls = [];
+		while(true) {
+			var tk = this.token();
+			if(tk == hscript_Token.TEof) {
+				break;
+			}
+			this.tokens.push({ t : tk, min : this.tokenMin, max : this.tokenMax});
+			this.tokenMin = this.oldTokenMin;
+			this.tokenMax = this.oldTokenMax;
+			decls.push(this.parseModuleDecl());
+		}
+		return decls;
+	}
+	,parseMetadata: function() {
+		var meta = [];
+		while(true) {
+			var tk = this.token();
+			if(tk._hx_index == 16) {
+				var name = tk.s;
+				meta.push({ name : name, params : this.parseMetaArgs()});
+			} else {
+				this.tokens.push({ t : tk, min : this.tokenMin, max : this.tokenMax});
+				this.tokenMin = this.oldTokenMin;
+				this.tokenMax = this.oldTokenMax;
+				break;
+			}
+		}
+		return meta;
+	}
+	,parseParams: function() {
+		if(this.maybe(hscript_Token.TOp("<"))) {
+			if(!this.resumeErrors) {
+				throw haxe_Exception.thrown(new hscript_Error(hscript_ErrorDef.EInvalidOp("Unsupported class type parameters"),this.readPos + this.offset,this.readPos + this.offset,this.origin,this.line));
+			}
+		}
+		return { };
+	}
+	,parseModuleDecl: function() {
+		var meta = this.parseMetadata();
+		var ident = this.getIdent();
+		var isPrivate = false;
+		var isExtern = false;
+		_hx_loop1: while(true) {
+			switch(ident) {
+			case "extern":
+				isExtern = true;
+				break;
+			case "private":
+				isPrivate = true;
+				break;
+			default:
+				break _hx_loop1;
+			}
+			ident = this.getIdent();
+		}
+		switch(ident) {
+		case "class":
+			var name = this.getIdent();
+			var params = this.parseParams();
+			var extend = null;
+			var implement = [];
+			_hx_loop2: while(true) {
+				var t = this.token();
+				if(t._hx_index == 2) {
+					switch(t.s) {
+					case "extends":
+						extend = this.parseType();
+						break;
+					case "implements":
+						implement.push(this.parseType());
+						break;
+					default:
+						this.tokens.push({ t : t, min : this.tokenMin, max : this.tokenMax});
+						this.tokenMin = this.oldTokenMin;
+						this.tokenMax = this.oldTokenMax;
+						break _hx_loop2;
+					}
+				} else {
+					this.tokens.push({ t : t, min : this.tokenMin, max : this.tokenMax});
+					this.tokenMin = this.oldTokenMin;
+					this.tokenMax = this.oldTokenMax;
+					break;
+				}
+			}
+			var fields = [];
+			var t = this.token();
+			if(t != hscript_Token.TBrOpen) {
+				this.unexpected(t);
+			}
+			while(!this.maybe(hscript_Token.TBrClose)) fields.push(this.parseField());
+			return hscript_ModuleDecl.DClass({ name : name, meta : meta, params : params, extend : extend, implement : implement, fields : fields, isPrivate : isPrivate, isExtern : isExtern});
+		case "import":
+			var path = [this.getIdent()];
+			var star = false;
+			while(true) {
+				var t = this.token();
+				if(t != hscript_Token.TDot) {
+					this.tokens.push({ t : t, min : this.tokenMin, max : this.tokenMax});
+					this.tokenMin = this.oldTokenMin;
+					this.tokenMax = this.oldTokenMax;
+					break;
+				}
+				t = this.token();
+				switch(t._hx_index) {
+				case 2:
+					var id = t.s;
+					path.push(id);
+					break;
+				case 3:
+					if(t.s == "*") {
+						star = true;
+					} else {
+						this.unexpected(t);
+					}
+					break;
+				default:
+					this.unexpected(t);
+				}
+			}
+			var t = this.token();
+			if(t != hscript_Token.TSemicolon) {
+				this.unexpected(t);
+			}
+			return hscript_ModuleDecl.DImport(path,star);
+		case "package":
+			var path = this.parsePath();
+			var t = this.token();
+			if(t != hscript_Token.TSemicolon) {
+				this.unexpected(t);
+			}
+			return hscript_ModuleDecl.DPackage(path);
+		case "typedef":
+			var name = this.getIdent();
+			var params = this.parseParams();
+			var t = this.token();
+			if(!Type.enumEq(t,hscript_Token.TOp("="))) {
+				this.unexpected(t);
+			}
+			var t = this.parseType();
+			return hscript_ModuleDecl.DTypedef({ name : name, meta : meta, params : params, isPrivate : isPrivate, t : t});
+		default:
+			this.unexpected(hscript_Token.TId(ident));
+		}
+		return null;
+	}
+	,parseField: function() {
+		var meta = this.parseMetadata();
+		var access = [];
+		_hx_loop1: while(true) {
+			var id = this.getIdent();
+			switch(id) {
+			case "function":
+				var name = this.getIdent();
+				var inf = this.parseFunctionDecl();
+				return { name : name, meta : meta, access : access, kind : hscript_FieldKind.KFunction({ args : inf.args, expr : inf.body, ret : inf.ret})};
+			case "inline":
+				access.push(hscript_FieldAccess.AInline);
+				break;
+			case "macro":
+				access.push(hscript_FieldAccess.AMacro);
+				break;
+			case "override":
+				access.push(hscript_FieldAccess.AOverride);
+				break;
+			case "private":
+				access.push(hscript_FieldAccess.APrivate);
+				break;
+			case "public":
+				access.push(hscript_FieldAccess.APublic);
+				break;
+			case "static":
+				access.push(hscript_FieldAccess.AStatic);
+				break;
+			case "var":
+				var name1 = this.getIdent();
+				var get = null;
+				var set = null;
+				if(this.maybe(hscript_Token.TPOpen)) {
+					get = this.getIdent();
+					var t = this.token();
+					if(t != hscript_Token.TComma) {
+						this.unexpected(t);
+					}
+					set = this.getIdent();
+					var t1 = this.token();
+					if(t1 != hscript_Token.TPClose) {
+						this.unexpected(t1);
+					}
+				}
+				var type = this.maybe(hscript_Token.TDoubleDot) ? this.parseType() : null;
+				var expr = this.maybe(hscript_Token.TOp("=")) ? this.parseExpr() : null;
+				if(expr != null) {
+					if(this.isBlock(expr)) {
+						this.maybe(hscript_Token.TSemicolon);
+					} else {
+						var t2 = this.token();
+						if(t2 != hscript_Token.TSemicolon) {
+							this.unexpected(t2);
+						}
+					}
+				} else {
+					var tmp;
+					if(type != null) {
+						if(type == null) {
+							tmp = false;
+						} else if(type._hx_index == 2) {
+							var _g = type.fields;
+							tmp = true;
+						} else {
+							tmp = false;
+						}
+					} else {
+						tmp = false;
+					}
+					if(tmp) {
+						this.maybe(hscript_Token.TSemicolon);
+					} else {
+						var t3 = this.token();
+						if(t3 != hscript_Token.TSemicolon) {
+							this.unexpected(t3);
+						}
+					}
+				}
+				return { name : name1, meta : meta, access : access, kind : hscript_FieldKind.KVar({ get : get, set : set, type : type, expr : expr})};
+			default:
+				this.unexpected(hscript_Token.TId(id));
+				break _hx_loop1;
+			}
+		}
+		return null;
+	}
+	,readChar: function() {
+		return this.input.charCodeAt(this.readPos++);
+	}
+	,readString: function(until) {
+		var c = 0;
+		var b_b = "";
+		var esc = false;
+		var old = this.line;
+		var s = this.input;
+		var p1 = this.readPos + this.offset - 1;
+		while(true) {
+			var c = this.input.charCodeAt(this.readPos++);
+			if(c != c) {
+				this.line = old;
+				if(!this.resumeErrors) {
+					throw haxe_Exception.thrown(new hscript_Error(hscript_ErrorDef.EUnterminatedString,p1,p1,this.origin,this.line));
+				}
+				break;
+			}
+			if(esc) {
+				esc = false;
+				switch(c) {
+				case 47:
+					if(this.allowJSON) {
+						b_b += String.fromCodePoint(c);
+					} else {
+						this.invalidChar(c);
+					}
+					break;
+				case 34:case 39:case 92:
+					b_b += String.fromCodePoint(c);
+					break;
+				case 110:
+					b_b += String.fromCodePoint(10);
+					break;
+				case 114:
+					b_b += String.fromCodePoint(13);
+					break;
+				case 116:
+					b_b += String.fromCodePoint(9);
+					break;
+				case 117:
+					if(!this.allowJSON) {
+						this.invalidChar(c);
+					}
+					var k = 0;
+					var _g = 0;
+					while(_g < 4) {
+						var i = _g++;
+						k <<= 4;
+						var char = this.input.charCodeAt(this.readPos++);
+						switch(char) {
+						case 48:case 49:case 50:case 51:case 52:case 53:case 54:case 55:case 56:case 57:
+							k += char - 48;
+							break;
+						case 65:case 66:case 67:case 68:case 69:case 70:
+							k += char - 55;
+							break;
+						case 97:case 98:case 99:case 100:case 101:case 102:
+							k += char - 87;
+							break;
+						default:
+							if(char != char) {
+								this.line = old;
+								if(!this.resumeErrors) {
+									throw haxe_Exception.thrown(new hscript_Error(hscript_ErrorDef.EUnterminatedString,p1,p1,this.origin,this.line));
+								}
+							}
+							this.invalidChar(char);
+						}
+					}
+					b_b += String.fromCodePoint(k);
+					break;
+				default:
+					this.invalidChar(c);
+				}
+			} else if(c == 92) {
+				esc = true;
+			} else if(c == until) {
+				break;
+			} else {
+				if(c == 10) {
+					this.line++;
+				}
+				b_b += String.fromCodePoint(c);
+			}
+		}
+		return b_b;
+	}
+	,token: function() {
+		var t = this.tokens.pop();
+		if(t != null) {
+			this.tokenMin = t.min;
+			this.tokenMax = t.max;
+			return t.t;
+		}
+		this.oldTokenMin = this.tokenMin;
+		this.oldTokenMax = this.tokenMax;
+		this.tokenMin = this.char < 0 ? this.readPos + this.offset : this.readPos + this.offset - 1;
+		var t = this._token();
+		this.tokenMax = this.char < 0 ? this.readPos + this.offset - 1 : this.readPos + this.offset - 2;
+		return t;
+	}
+	,_token: function() {
+		var char;
+		if(this.char < 0) {
+			char = this.input.charCodeAt(this.readPos++);
+		} else {
+			char = this.char;
+			this.char = -1;
+		}
+		while(true) {
+			if(char != char) {
+				this.char = char;
+				return hscript_Token.TEof;
+			}
+			switch(char) {
+			case 0:
+				return hscript_Token.TEof;
+			case 10:
+				this.line++;
+				this.tokenMin++;
+				break;
+			case 9:case 13:case 32:
+				this.tokenMin++;
+				break;
+			case 34:case 39:
+				return hscript_Token.TConst(hscript_Const.CString(this.readString(char)));
+			case 35:
+				char = this.input.charCodeAt(this.readPos++);
+				if(this.idents[char]) {
+					var id = String.fromCodePoint(char);
+					while(true) {
+						char = this.input.charCodeAt(this.readPos++);
+						if(!this.idents[char]) {
+							this.char = char;
+							return this.preprocess(id);
+						}
+						id += String.fromCodePoint(char);
+					}
+				}
+				this.invalidChar(char);
+				break;
+			case 40:
+				return hscript_Token.TPOpen;
+			case 41:
+				return hscript_Token.TPClose;
+			case 44:
+				return hscript_Token.TComma;
+			case 46:
+				char = this.input.charCodeAt(this.readPos++);
+				switch(char) {
+				case 46:
+					char = this.input.charCodeAt(this.readPos++);
+					if(char != 46) {
+						this.invalidChar(char);
+					}
+					return hscript_Token.TOp("...");
+				case 48:case 49:case 50:case 51:case 52:case 53:case 54:case 55:case 56:case 57:
+					var n = char - 48;
+					var exp = 1;
+					while(true) {
+						char = this.input.charCodeAt(this.readPos++);
+						exp *= 10;
+						switch(char) {
+						case 48:case 49:case 50:case 51:case 52:case 53:case 54:case 55:case 56:case 57:
+							n = n * 10 + (char - 48);
+							break;
+						default:
+							this.char = char;
+							return hscript_Token.TConst(hscript_Const.CFloat(n / exp));
+						}
+					}
+					break;
+				default:
+					this.char = char;
+					return hscript_Token.TDot;
+				}
+				break;
+			case 48:case 49:case 50:case 51:case 52:case 53:case 54:case 55:case 56:case 57:
+				var n1 = (char - 48) * 1.0;
+				var exp1 = 0.;
+				while(true) {
+					char = this.input.charCodeAt(this.readPos++);
+					exp1 *= 10;
+					switch(char) {
+					case 46:
+						if(exp1 > 0) {
+							if(exp1 == 10 && this.input.charCodeAt(this.readPos++) == 46) {
+								this.tokens.push({ t : hscript_Token.TOp("..."), min : this.tokenMin, max : this.tokenMax});
+								this.tokenMin = this.oldTokenMin;
+								this.tokenMax = this.oldTokenMax;
+								var i = n1 | 0;
+								return hscript_Token.TConst(i == n1 ? hscript_Const.CInt(i) : hscript_Const.CFloat(n1));
+							}
+							this.invalidChar(char);
+						}
+						exp1 = 1.;
+						break;
+					case 48:case 49:case 50:case 51:case 52:case 53:case 54:case 55:case 56:case 57:
+						n1 = n1 * 10 + (char - 48);
+						break;
+					case 69:case 101:
+						var tk = this.token();
+						var pow = null;
+						switch(tk._hx_index) {
+						case 1:
+							var _g = tk.c;
+							if(_g._hx_index == 0) {
+								var e = _g.v;
+								pow = e;
+							} else {
+								this.tokens.push({ t : tk, min : this.tokenMin, max : this.tokenMax});
+								this.tokenMin = this.oldTokenMin;
+								this.tokenMax = this.oldTokenMax;
+							}
+							break;
+						case 3:
+							if(tk.s == "-") {
+								tk = this.token();
+								if(tk._hx_index == 1) {
+									var _g1 = tk.c;
+									if(_g1._hx_index == 0) {
+										var e1 = _g1.v;
+										pow = -e1;
+									} else {
+										this.tokens.push({ t : tk, min : this.tokenMin, max : this.tokenMax});
+										this.tokenMin = this.oldTokenMin;
+										this.tokenMax = this.oldTokenMax;
+									}
+								} else {
+									this.tokens.push({ t : tk, min : this.tokenMin, max : this.tokenMax});
+									this.tokenMin = this.oldTokenMin;
+									this.tokenMax = this.oldTokenMax;
+								}
+							} else {
+								this.tokens.push({ t : tk, min : this.tokenMin, max : this.tokenMax});
+								this.tokenMin = this.oldTokenMin;
+								this.tokenMax = this.oldTokenMax;
+							}
+							break;
+						default:
+							this.tokens.push({ t : tk, min : this.tokenMin, max : this.tokenMax});
+							this.tokenMin = this.oldTokenMin;
+							this.tokenMax = this.oldTokenMax;
+						}
+						if(pow == null) {
+							this.invalidChar(char);
+						}
+						if(exp1 == 0) {
+							exp1 = 10;
+						}
+						return hscript_Token.TConst(hscript_Const.CFloat(Math.pow(10,pow) / exp1 * n1 * 10));
+					case 120:
+						if(n1 > 0 || exp1 > 0) {
+							this.invalidChar(char);
+						}
+						var n2 = 0;
+						while(true) {
+							char = this.input.charCodeAt(this.readPos++);
+							switch(char) {
+							case 48:case 49:case 50:case 51:case 52:case 53:case 54:case 55:case 56:case 57:
+								n2 = (n2 << 4) + char - 48;
+								break;
+							case 65:case 66:case 67:case 68:case 69:case 70:
+								n2 = (n2 << 4) + (char - 55);
+								break;
+							case 97:case 98:case 99:case 100:case 101:case 102:
+								n2 = (n2 << 4) + (char - 87);
+								break;
+							default:
+								this.char = char;
+								return hscript_Token.TConst(hscript_Const.CInt(n2));
+							}
+						}
+						break;
+					default:
+						this.char = char;
+						var i1 = n1 | 0;
+						return hscript_Token.TConst(exp1 > 0 ? hscript_Const.CFloat(n1 * 10 / exp1) : i1 == n1 ? hscript_Const.CInt(i1) : hscript_Const.CFloat(n1));
+					}
+				}
+				break;
+			case 58:
+				return hscript_Token.TDoubleDot;
+			case 59:
+				return hscript_Token.TSemicolon;
+			case 61:
+				char = this.input.charCodeAt(this.readPos++);
+				if(char == 61) {
+					return hscript_Token.TOp("==");
+				} else if(char == 62) {
+					return hscript_Token.TOp("=>");
+				}
+				this.char = char;
+				return hscript_Token.TOp("=");
+			case 63:
+				char = this.input.charCodeAt(this.readPos++);
+				if(char == 46) {
+					return hscript_Token.TQuestionDot;
+				}
+				this.char = char;
+				return hscript_Token.TQuestion;
+			case 64:
+				char = this.input.charCodeAt(this.readPos++);
+				if(this.idents[char] || char == 58) {
+					var id1 = String.fromCodePoint(char);
+					while(true) {
+						char = this.input.charCodeAt(this.readPos++);
+						if(!this.idents[char]) {
+							this.char = char;
+							return hscript_Token.TMeta(id1);
+						}
+						id1 += String.fromCodePoint(char);
+					}
+				}
+				this.invalidChar(char);
+				break;
+			case 91:
+				return hscript_Token.TBkOpen;
+			case 93:
+				return hscript_Token.TBkClose;
+			case 123:
+				return hscript_Token.TBrOpen;
+			case 125:
+				return hscript_Token.TBrClose;
+			default:
+				if(this.ops[char]) {
+					var op = String.fromCodePoint(char);
+					while(true) {
+						char = this.input.charCodeAt(this.readPos++);
+						if(char != char) {
+							char = 0;
+						}
+						if(!this.ops[char]) {
+							this.char = char;
+							return hscript_Token.TOp(op);
+						}
+						var pop = op;
+						op += String.fromCodePoint(char);
+						if(!Object.prototype.hasOwnProperty.call(this.opPriority.h,op) && Object.prototype.hasOwnProperty.call(this.opPriority.h,pop)) {
+							if(op == "//" || op == "/*") {
+								return this.tokenComment(op,char);
+							}
+							this.char = char;
+							return hscript_Token.TOp(pop);
+						}
+					}
+				}
+				if(this.idents[char]) {
+					var id2 = String.fromCodePoint(char);
+					while(true) {
+						char = this.input.charCodeAt(this.readPos++);
+						if(char != char) {
+							char = 0;
+						}
+						if(!this.idents[char]) {
+							this.char = char;
+							return hscript_Token.TId(id2);
+						}
+						id2 += String.fromCodePoint(char);
+					}
+				}
+				this.invalidChar(char);
+			}
+			char = this.input.charCodeAt(this.readPos++);
+		}
+	}
+	,preprocValue: function(id) {
+		return this.preprocesorValues.h[id];
+	}
+	,parsePreproCond: function() {
+		var tk = this.token();
+		switch(tk._hx_index) {
+		case 2:
+			var id = tk.s;
+			var e = hscript_ExprDef.EIdent(id);
+			var pmin = this.tokenMin;
+			var pmax = this.tokenMax;
+			if(e == null) {
+				return null;
+			} else {
+				if(pmin == null) {
+					pmin = this.tokenMin;
+				}
+				if(pmax == null) {
+					pmax = this.tokenMax;
+				}
+				return { e : e, pmin : pmin, pmax : pmax, origin : this.origin, line : this.line};
+			}
+			break;
+		case 3:
+			if(tk.s == "!") {
+				var e = hscript_ExprDef.EUnop("!",true,this.parsePreproCond());
+				var pmin = this.tokenMin;
+				var pmax = this.tokenMax;
+				if(e == null) {
+					return null;
+				} else {
+					if(pmin == null) {
+						pmin = this.tokenMin;
+					}
+					if(pmax == null) {
+						pmax = this.tokenMax;
+					}
+					return { e : e, pmin : pmin, pmax : pmax, origin : this.origin, line : this.line};
+				}
+			} else {
+				return this.unexpected(tk);
+			}
+			break;
+		case 4:
+			this.tokens.push({ t : hscript_Token.TPOpen, min : this.tokenMin, max : this.tokenMax});
+			this.tokenMin = this.oldTokenMin;
+			this.tokenMax = this.oldTokenMax;
+			return this.parseExpr();
+		default:
+			return this.unexpected(tk);
+		}
+	}
+	,evalPreproCond: function(e) {
+		var _g = e.e;
+		switch(_g._hx_index) {
+		case 1:
+			var id = _g.v;
+			return this.preprocValue(id) != null;
+		case 3:
+			var e1 = _g.e;
+			return this.evalPreproCond(e1);
+		case 6:
+			var _g1 = _g.e1;
+			var _g2 = _g.e2;
+			switch(_g.op) {
+			case "&&":
+				var e1 = _g1;
+				var e2 = _g2;
+				if(this.evalPreproCond(e1)) {
+					return this.evalPreproCond(e2);
+				} else {
+					return false;
+				}
+				break;
+			case "||":
+				var e1 = _g1;
+				var e2 = _g2;
+				if(!this.evalPreproCond(e1)) {
+					return this.evalPreproCond(e2);
+				} else {
+					return true;
+				}
+				break;
+			default:
+				var e1 = e.e;
+				if(!this.resumeErrors) {
+					throw haxe_Exception.thrown(new hscript_Error(hscript_ErrorDef.EInvalidPreprocessor("Can't eval " + $hxEnums[e1.__enum__].__constructs__[e1._hx_index]._hx_name),this.readPos + this.offset,this.readPos + this.offset,this.origin,this.line));
+				}
+				return false;
+			}
+			break;
+		case 7:
+			var _g1 = _g.prefix;
+			if(_g.op == "!") {
+				var e1 = _g.e;
+				return !this.evalPreproCond(e1);
+			} else {
+				var e1 = e.e;
+				if(!this.resumeErrors) {
+					throw haxe_Exception.thrown(new hscript_Error(hscript_ErrorDef.EInvalidPreprocessor("Can't eval " + $hxEnums[e1.__enum__].__constructs__[e1._hx_index]._hx_name),this.readPos + this.offset,this.readPos + this.offset,this.origin,this.line));
+				}
+				return false;
+			}
+			break;
+		default:
+			var e1 = e.e;
+			if(!this.resumeErrors) {
+				throw haxe_Exception.thrown(new hscript_Error(hscript_ErrorDef.EInvalidPreprocessor("Can't eval " + $hxEnums[e1.__enum__].__constructs__[e1._hx_index]._hx_name),this.readPos + this.offset,this.readPos + this.offset,this.origin,this.line));
+			}
+			return false;
+		}
+	}
+	,preprocess: function(id) {
+		switch(id) {
+		case "else":case "elseif":
+			if(this.preprocStack.length > 0) {
+				if(this.preprocStack[this.preprocStack.length - 1].r) {
+					this.preprocStack[this.preprocStack.length - 1].r = false;
+					this.skipTokens();
+					return this.token();
+				} else if(id == "else") {
+					this.preprocStack.pop();
+					this.preprocStack.push({ r : true});
+					return this.token();
+				} else {
+					this.preprocStack.pop();
+					return this.preprocess("if");
+				}
+			} else {
+				return hscript_Token.TPrepro(id);
+			}
+			break;
+		case "end":
+			if(this.preprocStack.length > 0) {
+				this.preprocStack.pop();
+				return this.token();
+			} else {
+				return hscript_Token.TPrepro(id);
+			}
+			break;
+		case "if":
+			var e = this.parsePreproCond();
+			if(this.evalPreproCond(e)) {
+				this.preprocStack.push({ r : true});
+				return this.token();
+			}
+			this.preprocStack.push({ r : false});
+			this.skipTokens();
+			return this.token();
+		default:
+			return hscript_Token.TPrepro(id);
+		}
+	}
+	,skipTokens: function() {
+		var spos = this.preprocStack.length - 1;
+		var obj = this.preprocStack[spos];
+		var pos = this.readPos + this.offset;
+		while(true) {
+			var tk = this.token();
+			if(tk == hscript_Token.TEof) {
+				if(!this.resumeErrors) {
+					throw haxe_Exception.thrown(new hscript_Error(hscript_ErrorDef.EInvalidPreprocessor("Unclosed"),pos,pos,this.origin,this.line));
+				}
+			}
+			if(this.preprocStack[spos] != obj) {
+				this.tokens.push({ t : tk, min : this.tokenMin, max : this.tokenMax});
+				this.tokenMin = this.oldTokenMin;
+				this.tokenMax = this.oldTokenMax;
+				break;
+			}
+		}
+	}
+	,tokenComment: function(op,char) {
+		var c = HxOverrides.cca(op,1);
+		var s = this.input;
+		if(c == 47) {
+			while(char != 13 && char != 10) {
+				char = this.input.charCodeAt(this.readPos++);
+				if(char != char) {
+					break;
+				}
+			}
+			this.char = char;
+			return this.token();
+		}
+		if(c == 42) {
+			var old = this.line;
+			if(op == "/**/") {
+				this.char = char;
+				return this.token();
+			}
+			do {
+				while(char != 42) {
+					if(char == 10) {
+						this.line++;
+					}
+					char = this.input.charCodeAt(this.readPos++);
+					if(char != char) {
+						this.line = old;
+						if(!this.resumeErrors) {
+							throw haxe_Exception.thrown(new hscript_Error(hscript_ErrorDef.EUnterminatedComment,this.tokenMin,this.tokenMin,this.origin,this.line));
+						}
+						break;
+					}
+				}
+				char = this.input.charCodeAt(this.readPos++);
+				if(char != char) {
+					this.line = old;
+					if(!this.resumeErrors) {
+						throw haxe_Exception.thrown(new hscript_Error(hscript_ErrorDef.EUnterminatedComment,this.tokenMin,this.tokenMin,this.origin,this.line));
+					}
+					break;
+				}
+			} while(char != 47);
+			return this.token();
+		}
+		this.char = char;
+		return hscript_Token.TOp(op);
+	}
+	,constString: function(c) {
+		switch(c._hx_index) {
+		case 0:
+			var v = c.v;
+			if(v == null) {
+				return "null";
+			} else {
+				return "" + v;
+			}
+			break;
+		case 1:
+			var f = c.f;
+			if(f == null) {
+				return "null";
+			} else {
+				return "" + f;
+			}
+			break;
+		case 2:
+			var s = c.s;
+			return s;
+		}
+	}
+	,tokenString: function(t) {
+		switch(t._hx_index) {
+		case 0:
+			return "<eof>";
+		case 1:
+			var c = t.c;
+			return this.constString(c);
+		case 2:
+			var s = t.s;
+			return s;
+		case 3:
+			var s = t.s;
+			return s;
+		case 4:
+			return "(";
+		case 5:
+			return ")";
+		case 6:
+			return "{";
+		case 7:
+			return "}";
+		case 8:
+			return ".";
+		case 9:
+			return "?.";
+		case 10:
+			return ",";
+		case 11:
+			return ";";
+		case 12:
+			return "[";
+		case 13:
+			return "]";
+		case 14:
+			return "?";
+		case 15:
+			return ":";
+		case 16:
+			var id = t.s;
+			return "@" + id;
+		case 17:
+			var id = t.s;
+			return "#" + id;
+		}
+	}
+	,__class__: hscript_Parser
+	,__properties__: {get_currentPos:"get_currentPos"}
+};
+var hscript_Printer = function() {
+};
+hscript_Printer.__name__ = "hscript.Printer";
+hscript_Printer.toString = function(e) {
+	return new hscript_Printer().exprToString(e);
+};
+hscript_Printer.errorToString = function(e) {
+	var message;
+	var _g = e.e;
+	switch(_g._hx_index) {
+	case 0:
+		var c = _g.c;
+		message = "Invalid character: '" + (c != c ? "EOF" : String.fromCodePoint(c)) + "' (" + c + ")";
+		break;
+	case 1:
+		var s = _g.s;
+		message = "Unexpected token: \"" + s + "\"";
+		break;
+	case 2:
+		message = "Unterminated string";
+		break;
+	case 3:
+		message = "Unterminated comment";
+		break;
+	case 4:
+		var str = _g.msg;
+		message = "Invalid preprocessor (" + str + ")";
+		break;
+	case 5:
+		var v = _g.v;
+		message = "Unknown variable: " + v;
+		break;
+	case 6:
+		var v = _g.v;
+		message = "Invalid iterator: " + v;
+		break;
+	case 7:
+		var op = _g.op;
+		message = "Invalid operator: " + op;
+		break;
+	case 8:
+		var f = _g.f;
+		message = "Invalid access to field " + f;
+		break;
+	case 9:
+		var msg = _g.msg;
+		message = msg;
+		break;
+	}
+	return e.origin + ":" + e.line + ": " + message;
+};
+hscript_Printer.prototype = {
+	exprToString: function(e) {
+		this.buf = new StringBuf();
+		this.tabs = "";
+		this.expr(e);
+		return this.buf.b;
+	}
+	,typeToString: function(t) {
+		this.buf = new StringBuf();
+		this.tabs = "";
+		this.type(t);
+		return this.buf.b;
+	}
+	,add: function(s) {
+		this.buf.b += Std.string(s);
+	}
+	,type: function(t) {
+		switch(t._hx_index) {
+		case 0:
+			var path = t.path;
+			var params = t.params;
+			var s = path.join(".");
+			this.buf.b += Std.string(s);
+			if(params != null) {
+				this.buf.b += "<";
+				var first = true;
+				var _g = 0;
+				while(_g < params.length) {
+					var p = params[_g];
+					++_g;
+					if(first) {
+						first = false;
+					} else {
+						this.buf.b += ", ";
+					}
+					this.type(p);
+				}
+				this.buf.b += ">";
+			}
+			break;
+		case 1:
+			var _g = t.args;
+			var _g1 = t.ret;
+			var args = _g;
+			var ret = _g1;
+			if(Lambda.exists(args,function(a) {
+				if(a._hx_index == 5) {
+					var _g = a.n;
+					var _g = a.t;
+					return true;
+				} else {
+					return false;
+				}
+			})) {
+				this.buf.b += "(";
+				var _g2 = 0;
+				while(_g2 < args.length) {
+					var a = args[_g2];
+					++_g2;
+					if(a._hx_index == 5) {
+						var _g3 = a.n;
+						var _g4 = a.t;
+						this.type(a);
+					} else {
+						this.type(hscript_CType.CTNamed("_",a));
+					}
+				}
+				this.buf.b += ")->";
+				this.type(ret);
+			} else {
+				var args = _g;
+				var ret = _g1;
+				if(args.length == 0) {
+					this.buf.b += "Void -> ";
+				} else {
+					var _g = 0;
+					while(_g < args.length) {
+						var a = args[_g];
+						++_g;
+						this.type(a);
+						this.buf.b += " -> ";
+					}
+				}
+				this.type(ret);
+			}
+			break;
+		case 2:
+			var fields = t.fields;
+			this.buf.b += "{";
+			var first = true;
+			var _g = 0;
+			while(_g < fields.length) {
+				var f = fields[_g];
+				++_g;
+				if(first) {
+					first = false;
+					this.buf.b += " ";
+				} else {
+					this.buf.b += ", ";
+				}
+				this.buf.b += Std.string(f.name + " : ");
+				this.type(f.t);
+			}
+			this.buf.b += first ? "}" : " }";
+			break;
+		case 3:
+			var t1 = t.t;
+			this.buf.b += "(";
+			this.type(t1);
+			this.buf.b += ")";
+			break;
+		case 4:
+			var t1 = t.t;
+			this.buf.b += "?";
+			this.type(t1);
+			break;
+		case 5:
+			var name = t.n;
+			var t1 = t.t;
+			this.buf.b += name == null ? "null" : "" + name;
+			this.buf.b += ":";
+			this.type(t1);
+			break;
+		}
+	}
+	,addType: function(t) {
+		if(t != null) {
+			this.buf.b += " : ";
+			this.type(t);
+		}
+	}
+	,expr: function(e) {
+		if(e == null) {
+			this.buf.b += "??NULL??";
+			return;
+		}
+		var _g = e.e;
+		switch(_g._hx_index) {
+		case 0:
+			var c = _g.c;
+			switch(c._hx_index) {
+			case 0:
+				var i = c.v;
+				this.buf.b += i == null ? "null" : "" + i;
+				break;
+			case 1:
+				var f = c.f;
+				this.buf.b += f == null ? "null" : "" + f;
+				break;
+			case 2:
+				var s = c.s;
+				this.buf.b += "\"";
+				var s1 = s.split("\"").join("\\\"").split("\n").join("\\n").split("\r").join("\\r").split("\t").join("\\t");
+				this.buf.b += Std.string(s1);
+				this.buf.b += "\"";
+				break;
+			}
+			break;
+		case 1:
+			var v = _g.v;
+			this.buf.b += v == null ? "null" : "" + v;
+			break;
+		case 2:
+			var n = _g.n;
+			var t = _g.t;
+			var e = _g.e;
+			this.buf.b += Std.string("var " + n);
+			this.addType(t);
+			if(e != null) {
+				this.buf.b += " = ";
+				this.expr(e);
+			}
+			break;
+		case 3:
+			var e = _g.e;
+			this.buf.b += "(";
+			this.expr(e);
+			this.buf.b += ")";
+			break;
+		case 4:
+			var el = _g.e;
+			if(el.length == 0) {
+				this.buf.b += "{}";
+			} else {
+				this.tabs += "\t";
+				this.buf.b += "{\n";
+				var _g1 = 0;
+				while(_g1 < el.length) {
+					var e = el[_g1];
+					++_g1;
+					this.buf.b += Std.string(this.tabs);
+					this.expr(e);
+					this.buf.b += ";\n";
+				}
+				this.tabs = HxOverrides.substr(this.tabs,1,null);
+				this.buf.b += "}";
+			}
+			break;
+		case 5:
+			var e = _g.e;
+			var f = _g.f;
+			this.expr(e);
+			this.buf.b += Std.string("." + f);
+			break;
+		case 6:
+			var op = _g.op;
+			var e1 = _g.e1;
+			var e2 = _g.e2;
+			this.expr(e1);
+			this.buf.b += Std.string(" " + op + " ");
+			this.expr(e2);
+			break;
+		case 7:
+			var op = _g.op;
+			var pre = _g.prefix;
+			var e = _g.e;
+			if(pre) {
+				this.buf.b += op == null ? "null" : "" + op;
+				this.expr(e);
+			} else {
+				this.expr(e);
+				this.buf.b += op == null ? "null" : "" + op;
+			}
+			break;
+		case 8:
+			var e = _g.e;
+			var args = _g.params;
+			if(e == null) {
+				this.expr(e);
+			} else {
+				var _g1 = e.e;
+				switch(_g1._hx_index) {
+				case 0:
+					var _g2 = _g1.c;
+					this.expr(e);
+					break;
+				case 1:
+					var _g2 = _g1.v;
+					this.expr(e);
+					break;
+				case 5:
+					var _g2 = _g1.e;
+					var _g2 = _g1.f;
+					this.expr(e);
+					break;
+				default:
+					this.buf.b += "(";
+					this.expr(e);
+					this.buf.b += ")";
+				}
+			}
+			this.buf.b += "(";
+			var first = true;
+			var _g1 = 0;
+			while(_g1 < args.length) {
+				var a = args[_g1];
+				++_g1;
+				if(first) {
+					first = false;
+				} else {
+					this.buf.b += ", ";
+				}
+				this.expr(a);
+			}
+			this.buf.b += ")";
+			break;
+		case 9:
+			var cond = _g.cond;
+			var e1 = _g.e1;
+			var e2 = _g.e2;
+			this.buf.b += "if( ";
+			this.expr(cond);
+			this.buf.b += " ) ";
+			this.expr(e1);
+			if(e2 != null) {
+				this.buf.b += " else ";
+				this.expr(e2);
+			}
+			break;
+		case 10:
+			var cond = _g.cond;
+			var e = _g.e;
+			this.buf.b += "while( ";
+			this.expr(cond);
+			this.buf.b += " ) ";
+			this.expr(e);
+			break;
+		case 11:
+			var v = _g.v;
+			var it = _g.it;
+			var e = _g.e;
+			this.buf.b += Std.string("for( " + v + " in ");
+			this.expr(it);
+			this.buf.b += " ) ";
+			this.expr(e);
+			break;
+		case 12:
+			this.buf.b += "break";
+			break;
+		case 13:
+			this.buf.b += "continue";
+			break;
+		case 14:
+			var params = _g.args;
+			var e = _g.e;
+			var name = _g.name;
+			var ret = _g.ret;
+			this.buf.b += "function";
+			if(name != null) {
+				this.buf.b += Std.string(" " + name);
+			}
+			this.buf.b += "(";
+			var first = true;
+			var _g1 = 0;
+			while(_g1 < params.length) {
+				var a = params[_g1];
+				++_g1;
+				if(first) {
+					first = false;
+				} else {
+					this.buf.b += ", ";
+				}
+				if(a.opt) {
+					this.buf.b += "?";
+				}
+				this.buf.b += Std.string(a.name);
+				this.addType(a.t);
+			}
+			this.buf.b += ")";
+			this.addType(ret);
+			this.buf.b += " ";
+			this.expr(e);
+			break;
+		case 15:
+			var e = _g.e;
+			this.buf.b += "return";
+			if(e != null) {
+				this.buf.b += " ";
+				this.expr(e);
+			}
+			break;
+		case 16:
+			var e = _g.e;
+			var index = _g.index;
+			this.expr(e);
+			this.buf.b += "[";
+			this.expr(index);
+			this.buf.b += "]";
+			break;
+		case 17:
+			var el = _g.e;
+			this.buf.b += "[";
+			var first = true;
+			var _g1 = 0;
+			while(_g1 < el.length) {
+				var e = el[_g1];
+				++_g1;
+				if(first) {
+					first = false;
+				} else {
+					this.buf.b += ", ";
+				}
+				this.expr(e);
+			}
+			this.buf.b += "]";
+			break;
+		case 18:
+			var cl = _g.cl;
+			var args = _g.params;
+			this.buf.b += Std.string("new " + cl + "(");
+			var first = true;
+			var _g1 = 0;
+			while(_g1 < args.length) {
+				var e = args[_g1];
+				++_g1;
+				if(first) {
+					first = false;
+				} else {
+					this.buf.b += ", ";
+				}
+				this.expr(e);
+			}
+			this.buf.b += ")";
+			break;
+		case 19:
+			var e = _g.e;
+			this.buf.b += "throw ";
+			this.expr(e);
+			break;
+		case 20:
+			var e = _g.e;
+			var v = _g.v;
+			var t = _g.t;
+			var ecatch = _g.ecatch;
+			this.buf.b += "try ";
+			this.expr(e);
+			this.buf.b += Std.string(" catch( " + v);
+			this.addType(t);
+			this.buf.b += ") ";
+			this.expr(ecatch);
+			break;
+		case 21:
+			var fl = _g.fl;
+			if(fl.length == 0) {
+				this.buf.b += "{}";
+			} else {
+				this.tabs += "\t";
+				this.buf.b += "{\n";
+				var _g1 = 0;
+				while(_g1 < fl.length) {
+					var f = fl[_g1];
+					++_g1;
+					this.buf.b += Std.string(this.tabs);
+					this.buf.b += Std.string(f.name + " : ");
+					this.expr(f.e);
+					this.buf.b += ",\n";
+				}
+				this.tabs = HxOverrides.substr(this.tabs,1,null);
+				this.buf.b += "}";
+			}
+			break;
+		case 22:
+			var c = _g.cond;
+			var e1 = _g.e1;
+			var e2 = _g.e2;
+			this.expr(c);
+			this.buf.b += " ? ";
+			this.expr(e1);
+			this.buf.b += " : ";
+			this.expr(e2);
+			break;
+		case 23:
+			var e = _g.e;
+			var cases = _g.cases;
+			var def = _g.defaultExpr;
+			this.buf.b += "switch( ";
+			this.expr(e);
+			this.buf.b += ") {";
+			var _g1 = 0;
+			while(_g1 < cases.length) {
+				var c = cases[_g1];
+				++_g1;
+				this.buf.b += "case ";
+				var first = true;
+				var _g2 = 0;
+				var _g3 = c.values;
+				while(_g2 < _g3.length) {
+					var v = _g3[_g2];
+					++_g2;
+					if(first) {
+						first = false;
+					} else {
+						this.buf.b += ", ";
+					}
+					this.expr(v);
+				}
+				this.buf.b += ": ";
+				this.expr(c.expr);
+				this.buf.b += ";\n";
+			}
+			if(def != null) {
+				this.buf.b += "default: ";
+				this.expr(def);
+				this.buf.b += ";\n";
+			}
+			this.buf.b += "}";
+			break;
+		case 24:
+			var cond = _g.cond;
+			var e = _g.e;
+			this.buf.b += "do ";
+			this.expr(e);
+			this.buf.b += " while ( ";
+			this.expr(cond);
+			this.buf.b += " )";
+			break;
+		case 25:
+			var name = _g.name;
+			var args = _g.args;
+			var e = _g.e;
+			this.buf.b += "@";
+			this.buf.b += name == null ? "null" : "" + name;
+			if(args != null && args.length > 0) {
+				this.buf.b += "(";
+				var first = true;
+				var _g1 = 0;
+				while(_g1 < args.length) {
+					var a = args[_g1];
+					++_g1;
+					if(first) {
+						first = false;
+					} else {
+						this.buf.b += ", ";
+					}
+					this.expr(e);
+				}
+				this.buf.b += ")";
+			}
+			this.buf.b += " ";
+			this.expr(e);
+			break;
+		case 26:
+			var e = _g.e;
+			var t = _g.t;
+			this.buf.b += "(";
+			this.expr(e);
+			this.buf.b += " : ";
+			this.addType(t);
+			this.buf.b += ")";
+			break;
+		}
+	}
+	,__class__: hscript_Printer
+};
+var hscript_Tools = function() { };
+hscript_Tools.__name__ = "hscript.Tools";
+hscript_Tools.iter = function(e,f) {
+	var _g = e.e;
+	switch(_g._hx_index) {
+	case 0:
+		var _g1 = _g.c;
+		break;
+	case 1:
+		var _g1 = _g.v;
+		break;
+	case 2:
+		var _g1 = _g.n;
+		var _g1 = _g.t;
+		var e = _g.e;
+		if(e != null) {
+			f(e);
+		}
+		break;
+	case 3:
+		var e = _g.e;
+		f(e);
+		break;
+	case 4:
+		var el = _g.e;
+		var _g1 = 0;
+		while(_g1 < el.length) {
+			var e = el[_g1];
+			++_g1;
+			f(e);
+		}
+		break;
+	case 5:
+		var _g1 = _g.f;
+		var e = _g.e;
+		f(e);
+		break;
+	case 6:
+		var _g1 = _g.op;
+		var e1 = _g.e1;
+		var e2 = _g.e2;
+		f(e1);
+		f(e2);
+		break;
+	case 7:
+		var _g1 = _g.op;
+		var _g1 = _g.prefix;
+		var e = _g.e;
+		f(e);
+		break;
+	case 8:
+		var e = _g.e;
+		var args = _g.params;
+		f(e);
+		var _g1 = 0;
+		while(_g1 < args.length) {
+			var a = args[_g1];
+			++_g1;
+			f(a);
+		}
+		break;
+	case 9:
+		var c = _g.cond;
+		var e1 = _g.e1;
+		var e2 = _g.e2;
+		f(c);
+		f(e1);
+		if(e2 != null) {
+			f(e2);
+		}
+		break;
+	case 10:
+		var c = _g.cond;
+		var e = _g.e;
+		f(c);
+		f(e);
+		break;
+	case 11:
+		var _g1 = _g.v;
+		var it = _g.it;
+		var e = _g.e;
+		f(it);
+		f(e);
+		break;
+	case 12:case 13:
+		break;
+	case 14:
+		var _g1 = _g.args;
+		var _g1 = _g.name;
+		var _g1 = _g.ret;
+		var e = _g.e;
+		f(e);
+		break;
+	case 15:
+		var e = _g.e;
+		if(e != null) {
+			f(e);
+		}
+		break;
+	case 16:
+		var e = _g.e;
+		var i = _g.index;
+		f(e);
+		f(i);
+		break;
+	case 17:
+		var el = _g.e;
+		var _g1 = 0;
+		while(_g1 < el.length) {
+			var e = el[_g1];
+			++_g1;
+			f(e);
+		}
+		break;
+	case 18:
+		var _g1 = _g.cl;
+		var el = _g.params;
+		var _g1 = 0;
+		while(_g1 < el.length) {
+			var e = el[_g1];
+			++_g1;
+			f(e);
+		}
+		break;
+	case 19:
+		var e = _g.e;
+		f(e);
+		break;
+	case 20:
+		var _g1 = _g.v;
+		var _g1 = _g.t;
+		var e = _g.e;
+		var c = _g.ecatch;
+		f(e);
+		f(c);
+		break;
+	case 21:
+		var fl = _g.fl;
+		var _g1 = 0;
+		while(_g1 < fl.length) {
+			var fi = fl[_g1];
+			++_g1;
+			f(fi.e);
+		}
+		break;
+	case 22:
+		var c = _g.cond;
+		var e1 = _g.e1;
+		var e2 = _g.e2;
+		f(c);
+		f(e1);
+		f(e2);
+		break;
+	case 23:
+		var e = _g.e;
+		var cases = _g.cases;
+		var def = _g.defaultExpr;
+		f(e);
+		var _g1 = 0;
+		while(_g1 < cases.length) {
+			var c = cases[_g1];
+			++_g1;
+			var _g2 = 0;
+			var _g3 = c.values;
+			while(_g2 < _g3.length) {
+				var v = _g3[_g2];
+				++_g2;
+				f(v);
+			}
+			f(c.expr);
+		}
+		if(def != null) {
+			f(def);
+		}
+		break;
+	case 24:
+		var c = _g.cond;
+		var e = _g.e;
+		f(c);
+		f(e);
+		break;
+	case 25:
+		var name = _g.name;
+		var args = _g.args;
+		var e = _g.e;
+		if(args != null) {
+			var _g1 = 0;
+			while(_g1 < args.length) {
+				var a = args[_g1];
+				++_g1;
+				f(a);
+			}
+		}
+		f(e);
+		break;
+	case 26:
+		var _g1 = _g.t;
+		var e = _g.e;
+		f(e);
+		break;
+	}
+};
+hscript_Tools.map = function(e,f) {
+	var edef;
+	var _g = e.e;
+	switch(_g._hx_index) {
+	case 0:
+		var _g1 = _g.c;
+		edef = e.e;
+		break;
+	case 1:
+		var _g1 = _g.v;
+		edef = e.e;
+		break;
+	case 2:
+		var n = _g.n;
+		var t = _g.t;
+		var e1 = _g.e;
+		edef = hscript_ExprDef.EVar(n,t,e1 != null ? f(e1) : null);
+		break;
+	case 3:
+		var e1 = _g.e;
+		edef = hscript_ExprDef.EParent(f(e1));
+		break;
+	case 4:
+		var el = _g.e;
+		var _g1 = [];
+		var _g2 = 0;
+		while(_g2 < el.length) {
+			var e1 = el[_g2];
+			++_g2;
+			_g1.push(f(e1));
+		}
+		edef = hscript_ExprDef.EBlock(_g1);
+		break;
+	case 5:
+		var e1 = _g.e;
+		var fi = _g.f;
+		edef = hscript_ExprDef.EField(f(e1),fi);
+		break;
+	case 6:
+		var op = _g.op;
+		var e1 = _g.e1;
+		var e2 = _g.e2;
+		edef = hscript_ExprDef.EBinop(op,f(e1),f(e2));
+		break;
+	case 7:
+		var op = _g.op;
+		var pre = _g.prefix;
+		var e1 = _g.e;
+		edef = hscript_ExprDef.EUnop(op,pre,f(e1));
+		break;
+	case 8:
+		var e1 = _g.e;
+		var args = _g.params;
+		var edef1 = f(e1);
+		var _g1 = [];
+		var _g2 = 0;
+		while(_g2 < args.length) {
+			var a = args[_g2];
+			++_g2;
+			_g1.push(f(a));
+		}
+		edef = hscript_ExprDef.ECall(edef1,_g1);
+		break;
+	case 9:
+		var c = _g.cond;
+		var e1 = _g.e1;
+		var e2 = _g.e2;
+		edef = hscript_ExprDef.EIf(f(c),f(e1),e2 != null ? f(e2) : null);
+		break;
+	case 10:
+		var c = _g.cond;
+		var e1 = _g.e;
+		edef = hscript_ExprDef.EWhile(f(c),f(e1));
+		break;
+	case 11:
+		var v = _g.v;
+		var it = _g.it;
+		var e1 = _g.e;
+		edef = hscript_ExprDef.EFor(v,f(it),f(e1));
+		break;
+	case 12:case 13:
+		edef = e.e;
+		break;
+	case 14:
+		var args = _g.args;
+		var e1 = _g.e;
+		var name = _g.name;
+		var t = _g.ret;
+		edef = hscript_ExprDef.EFunction(args,f(e1),name,t);
+		break;
+	case 15:
+		var e1 = _g.e;
+		edef = hscript_ExprDef.EReturn(e1 != null ? f(e1) : null);
+		break;
+	case 16:
+		var e1 = _g.e;
+		var i = _g.index;
+		edef = hscript_ExprDef.EArray(f(e1),f(i));
+		break;
+	case 17:
+		var el = _g.e;
+		var _g1 = [];
+		var _g2 = 0;
+		while(_g2 < el.length) {
+			var e1 = el[_g2];
+			++_g2;
+			_g1.push(f(e1));
+		}
+		edef = hscript_ExprDef.EArrayDecl(_g1);
+		break;
+	case 18:
+		var cl = _g.cl;
+		var el = _g.params;
+		var _g1 = [];
+		var _g2 = 0;
+		while(_g2 < el.length) {
+			var e1 = el[_g2];
+			++_g2;
+			_g1.push(f(e1));
+		}
+		edef = hscript_ExprDef.ENew(cl,_g1);
+		break;
+	case 19:
+		var e1 = _g.e;
+		edef = hscript_ExprDef.EThrow(f(e1));
+		break;
+	case 20:
+		var e1 = _g.e;
+		var v = _g.v;
+		var t = _g.t;
+		var c = _g.ecatch;
+		edef = hscript_ExprDef.ETry(f(e1),v,t,f(c));
+		break;
+	case 21:
+		var fl = _g.fl;
+		var _g1 = [];
+		var _g2 = 0;
+		while(_g2 < fl.length) {
+			var fi = fl[_g2];
+			++_g2;
+			_g1.push({ name : fi.name, e : f(fi.e)});
+		}
+		edef = hscript_ExprDef.EObject(_g1);
+		break;
+	case 22:
+		var c = _g.cond;
+		var e1 = _g.e1;
+		var e2 = _g.e2;
+		edef = hscript_ExprDef.ETernary(f(c),f(e1),f(e2));
+		break;
+	case 23:
+		var e1 = _g.e;
+		var cases = _g.cases;
+		var def = _g.defaultExpr;
+		var edef1 = f(e1);
+		var _g1 = [];
+		var _g2 = 0;
+		while(_g2 < cases.length) {
+			var c = cases[_g2];
+			++_g2;
+			var _g3 = [];
+			var _g4 = 0;
+			var _g5 = c.values;
+			while(_g4 < _g5.length) {
+				var v = _g5[_g4];
+				++_g4;
+				_g3.push(f(v));
+			}
+			_g1.push({ values : _g3, expr : f(c.expr)});
+		}
+		edef = hscript_ExprDef.ESwitch(edef1,_g1,def == null ? null : f(def));
+		break;
+	case 24:
+		var c = _g.cond;
+		var e1 = _g.e;
+		edef = hscript_ExprDef.EDoWhile(f(c),f(e1));
+		break;
+	case 25:
+		var name = _g.name;
+		var args = _g.args;
+		var e1 = _g.e;
+		var edef1;
+		if(args == null) {
+			edef1 = null;
+		} else {
+			var _g1 = [];
+			var _g2 = 0;
+			while(_g2 < args.length) {
+				var a = args[_g2];
+				++_g2;
+				_g1.push(f(a));
+			}
+			edef1 = _g1;
+		}
+		edef = hscript_ExprDef.EMeta(name,edef1,f(e1));
+		break;
+	case 26:
+		var e1 = _g.e;
+		var t = _g.t;
+		edef = hscript_ExprDef.ECheckType(f(e1),t);
+		break;
+	}
+	return { e : edef, pmin : e.pmin, pmax : e.pmax, origin : e.origin, line : e.line};
+};
+hscript_Tools.expr = function(e) {
+	return e.e;
+};
+hscript_Tools.mk = function(e,p) {
+	return { e : e, pmin : p.pmin, pmax : p.pmax, origin : p.origin, line : p.line};
 };
 var js_Boot = function() { };
 js_Boot.__name__ = "js.Boot";
@@ -2076,6 +12355,7 @@ js_Boot.__resolveNativeClass = function(name) {
 };
 var js_node_Fs = require("fs");
 var js_node_KeyValue = {};
+js_node_KeyValue.__properties__ = {get_value:"get_value",get_key:"get_key"};
 js_node_KeyValue.get_key = function(this1) {
 	return this1[0];
 };
@@ -2093,6 +12373,7 @@ js_node_stream_WritableNewOptionsAdapter.from = function(options) {
 	return options;
 };
 var js_node_url_URLSearchParamsEntry = {};
+js_node_url_URLSearchParamsEntry.__properties__ = {get_value:"get_value",get_name:"get_name"};
 js_node_url_URLSearchParamsEntry._new = function(name,value) {
 	return [name,value];
 };
@@ -2101,6 +12382,747 @@ js_node_url_URLSearchParamsEntry.get_name = function(this1) {
 };
 js_node_url_URLSearchParamsEntry.get_value = function(this1) {
 	return this1[1];
+};
+var loreline_CodeToHscriptStackType = {};
+loreline_CodeToHscriptStackType.toString = function(this1) {
+	switch(this1) {
+	case 0:
+		return "ObjectBrace";
+	case 1:
+		return "ArrayBracket";
+	case 2:
+		return "Brace";
+	case 3:
+		return "Indent";
+	case 4:
+		return "Bracket";
+	case 5:
+		return "Paren";
+	}
+};
+var loreline_CodeToHscript = function() {
+	this.indentStack = null;
+	this.indentLevel = 0;
+	this.inControlWithoutParens = false;
+	this.inControl = false;
+	this.currentPosOffset = 0;
+	this.posOffsets = null;
+	this.inString = false;
+	this.inComment = false;
+	this.indent = 0;
+	this.length = 0;
+	this.lineOutput = null;
+	this.output = null;
+	this.input = null;
+	this.index = 0;
+};
+loreline_CodeToHscript.__name__ = "loreline.CodeToHscript";
+loreline_CodeToHscript.prototype = {
+	process: function(input) {
+		input += "\n//";
+		this.input = input;
+		this.index = 0;
+		this.output = new StringBuf();
+		this.lineOutput = new StringBuf();
+		this.length = input.length;
+		this.indent = 0;
+		this.inComment = false;
+		this.inString = false;
+		this.posOffsets = [];
+		this.currentPosOffset = 0;
+		this.inControl = false;
+		this.inControlWithoutParens = false;
+		this.indentStack = [];
+		this.indentLevel = 0;
+		this.stack = [];
+		this.processInput();
+		return StringTools.rtrim(this.output.b) + "\n";
+	}
+	,toLorelinePos: function(funcPos,pmin,pmax) {
+		var min = this.inputPosFromProcessedPos(pmin);
+		var max = this.inputPosFromProcessedPos(pmax);
+		var len = max + 1 - min;
+		return funcPos.withOffset(this.input,min,len,funcPos.offset);
+	}
+	,inputPosFromProcessedPos: function(pos) {
+		if(pos < 0) {
+			return 0;
+		}
+		if(pos >= this.posOffsets.length) {
+			return this.input.length - 1 - this.posOffsets[this.input.length - 1];
+		}
+		return pos - this.posOffsets[pos];
+	}
+	,processedPosFromInputPos: function(pos) {
+		if(pos < 0) {
+			return 0;
+		}
+		if(pos >= this.input.length) {
+			return this.output.b.length - 1;
+		}
+		var count = 0;
+		var _g = 0;
+		var _g1 = this.posOffsets.length;
+		while(_g < _g1) {
+			var i = _g++;
+			if(i - this.posOffsets[i] > pos) {
+				return i - 1;
+			} else if(i - this.posOffsets[i] == pos) {
+				return i;
+			}
+			count = i;
+		}
+		return count;
+	}
+	,processInput: function(until) {
+		if(until == null) {
+			until = -1;
+		}
+		var braceLevel = 0;
+		var bracketLevel = 0;
+		var parenLevel = 0;
+		while(this.index < this.length) {
+			var c = HxOverrides.cca(this.input,this.index);
+			if(c == 34) {
+				this.processString();
+			} else if(c == 39) {
+				this.error("Unexpected single quote");
+			} else if(c == 47) {
+				var cc = HxOverrides.cca(this.input,this.index + 1);
+				if(cc == 47 || cc == 42) {
+					this.processComment();
+				} else {
+					this._add(c,true);
+				}
+			} else if(c == 10) {
+				this._add(c,true);
+			} else if(c == 123) {
+				++braceLevel;
+				this._add(c,true);
+			} else if(c == 125) {
+				--braceLevel;
+				if(c == until && braceLevel < 0) {
+					return;
+				} else {
+					this._add(c,true);
+				}
+			} else if(c == 91) {
+				++bracketLevel;
+				this._add(c,true);
+			} else if(c == 93) {
+				--bracketLevel;
+				if(c == until && bracketLevel < 0) {
+					return;
+				} else {
+					this._add(c,true);
+				}
+			} else if(c == 40) {
+				++parenLevel;
+				this._add(c,true);
+			} else if(c == 41) {
+				--parenLevel;
+				if(c == until && parenLevel < 0) {
+					return;
+				} else {
+					this._add(c,true);
+				}
+			} else if(this.isAlphaNumeric(c) && this.index > 0 && !this.isAlphaNumeric(HxOverrides.cca(this.input,this.index - 1))) {
+				if(c == 97) {
+					if(HxOverrides.cca(this.input,this.index + 1) == 110 && HxOverrides.cca(this.input,this.index + 2) == 100 && !this.isAlphaNumeric(HxOverrides.cca(this.input,this.index + 3))) {
+						this._add(38,true);
+						this._add(38,true);
+						this._add(32,true);
+					} else {
+						this._add(c,true);
+					}
+				} else if(c == 111) {
+					if(HxOverrides.cca(this.input,this.index + 1) == 114 && !this.isAlphaNumeric(HxOverrides.cca(this.input,this.index + 2))) {
+						this._add(124,true);
+						this._add(124,true);
+						this._add(32,true);
+					} else {
+						this._add(c,true);
+					}
+				} else {
+					this._add(c,true);
+				}
+			} else {
+				this._add(c,true);
+			}
+		}
+	}
+	,processString: function() {
+		this.inString = true;
+		this._add(34,true);
+		var escaped = false;
+		while(this.index < this.length) {
+			var c = HxOverrides.cca(this.input,this.index);
+			if(escaped) {
+				this._add(c,true);
+				escaped = false;
+			} else if(c == 92) {
+				escaped = true;
+				this._add(92,true);
+			} else if(c == 34) {
+				this._add(c,true);
+				this.inString = false;
+				return;
+			} else if(c == 36 && !escaped) {
+				this.index++;
+				c = HxOverrides.cca(this.input,this.index);
+				if(c == 123) {
+					this.currentPosOffset--;
+					this._add(34,false);
+					this._add(43,false);
+					this._add(40,true);
+					this.inString = false;
+					this.processComplexInterpolation();
+					this.inString = true;
+					this._add(41,true);
+					this.currentPosOffset--;
+					this._add(43,false);
+					this._add(34,false);
+					this.currentPosOffset++;
+				} else if(c >= 97 && c <= 122 || c >= 65 && c <= 90 || c == 95) {
+					this.currentPosOffset--;
+					this._add(34,false);
+					this._add(43,false);
+					this.processFieldAccessInterpolation();
+					this.currentPosOffset--;
+					this._add(43,false);
+					this._add(34,false);
+					this.currentPosOffset++;
+				} else {
+					this.error("Expected identifier or { after $");
+				}
+			} else {
+				this._add(c,true);
+			}
+		}
+		this.error("Unterminated string");
+	}
+	,processComplexInterpolation: function() {
+		this.processInput(125);
+	}
+	,processFieldAccessInterpolation: function() {
+		var c = HxOverrides.cca(this.input,this.index);
+		if(!(c >= 97 && c <= 122 || c >= 65 && c <= 90 || c == 95)) {
+			this.error("Expected identifier in field access");
+		}
+		this.processIdentifier();
+		_hx_loop1: while(this.index < this.length) {
+			var _g = HxOverrides.cca(this.input,this.index);
+			if(_g == null) {
+				break;
+			} else {
+				switch(_g) {
+				case 40:
+					this._add(40,true);
+					this.processInput(41);
+					this._add(41,true);
+					break;
+				case 46:
+					var tmp;
+					if(this.index + 1 < this.length) {
+						var c = HxOverrides.cca(this.input,this.index + 1);
+						tmp = c >= 97 && c <= 122 || c >= 65 && c <= 90 || c == 95;
+					} else {
+						tmp = false;
+					}
+					if(tmp) {
+						this._add(46,true);
+						this.processIdentifier();
+					} else {
+						break _hx_loop1;
+					}
+					break;
+				case 91:
+					this._add(91,true);
+					this.processInput(93);
+					break;
+				default:
+					break _hx_loop1;
+				}
+			}
+		}
+	}
+	,processIdentifier: function() {
+		while(this.index < this.length) {
+			var c = HxOverrides.cca(this.input,this.index);
+			if(!(c >= 97 && c <= 122 || c >= 65 && c <= 90 || c == 95 || c >= 48 && c <= 57)) {
+				break;
+			}
+			this._add(c,true);
+		}
+	}
+	,isDigit: function(c) {
+		if(c >= 48) {
+			return c <= 57;
+		} else {
+			return false;
+		}
+	}
+	,isIdentifierStart: function(c) {
+		if(!(c >= 97 && c <= 122 || c >= 65 && c <= 90)) {
+			return c == 95;
+		} else {
+			return true;
+		}
+	}
+	,isIdentifierPart: function(c) {
+		if(!(c >= 97 && c <= 122 || c >= 65 && c <= 90 || c == 95)) {
+			if(c >= 48) {
+				return c <= 57;
+			} else {
+				return false;
+			}
+		} else {
+			return true;
+		}
+	}
+	,processComment: function() {
+		this.inComment = true;
+		var c = HxOverrides.cca(this.input,this.index + 1);
+		if(c == 47) {
+			this._add(32,true);
+			this._add(32,true);
+			while(this.index < this.length) {
+				var cc = HxOverrides.cca(this.input,this.index);
+				if(cc == 10) {
+					break;
+				}
+				this._add(32,true);
+			}
+		} else if(c == 42) {
+			this._add(32,true);
+			this._add(32,true);
+			while(this.index < this.length) {
+				var cc = HxOverrides.cca(this.input,this.index);
+				if(cc == 42 && this.index + 1 < this.length && HxOverrides.cca(this.input,this.index + 1) == 47) {
+					this._add(32,true);
+					this._add(32,true);
+					break;
+				} else if(cc == 10) {
+					this._add(10,true);
+				} else {
+					this._add(32,true);
+				}
+			}
+		}
+		this.inComment = false;
+	}
+	,endsWithChar: function(line,c) {
+		if(line.length == 0) {
+			return false;
+		}
+		var trimmed = StringTools.rtrim(line);
+		var len = trimmed.length;
+		if(len > 0) {
+			return HxOverrides.cca(trimmed,len - 1) == c;
+		} else {
+			return false;
+		}
+	}
+	,followsWithChar: function(c,pos) {
+		var tempIndex = pos;
+		while(tempIndex < this.length) {
+			var cc = HxOverrides.cca(this.input,tempIndex);
+			if(cc == 32 || cc == 9 || cc == 10 || cc == 13) {
+				++tempIndex;
+				continue;
+			}
+			if(cc == 47 && tempIndex + 1 < this.length) {
+				var nextChar = HxOverrides.cca(this.input,tempIndex + 1);
+				if(nextChar == 47) {
+					tempIndex += 2;
+					while(tempIndex < this.length && HxOverrides.cca(this.input,tempIndex) != 10) ++tempIndex;
+					if(tempIndex < this.length) {
+						++tempIndex;
+					}
+					continue;
+				}
+				if(nextChar == 42) {
+					tempIndex += 2;
+					while(tempIndex + 1 < this.length) {
+						if(HxOverrides.cca(this.input,tempIndex) == 42 && HxOverrides.cca(this.input,tempIndex + 1) == 47) {
+							tempIndex += 2;
+							break;
+						}
+						++tempIndex;
+					}
+					continue;
+				}
+			}
+			return cc == c;
+		}
+		return false;
+	}
+	,endsOrFollowsWithChar: function(line,c,pos) {
+		if(!this.endsWithChar(line,c)) {
+			return this.followsWithChar(c,pos);
+		} else {
+			return true;
+		}
+	}
+	,nextLineIndentOffset: function(line,pos) {
+		var currentLine = StringTools.ltrim(line);
+		if(currentLine.length == 0) {
+			return 0;
+		}
+		var currentIndent = line.length - currentLine.length;
+		while(pos < this.length) {
+			var endLine = this.input.indexOf("\n",pos);
+			if(endLine == -1) {
+				endLine = this.length;
+			}
+			var nextLine = this.input.substring(pos,endLine);
+			var trimmed = StringTools.ltrim(nextLine);
+			if(trimmed.length > 0) {
+				var nextIndent = nextLine.length - trimmed.length;
+				return nextIndent - currentIndent;
+			}
+			pos = endLine + 1;
+		}
+		return 0;
+	}
+	,followsWithIf: function(pos) {
+		var tempIndex = pos;
+		while(tempIndex < this.length) {
+			var cc = HxOverrides.cca(this.input,tempIndex);
+			if(cc == 32 || cc == 9 || cc == 10 || cc == 13) {
+				++tempIndex;
+				continue;
+			}
+			if(cc == 47 && tempIndex + 1 < this.length) {
+				var nextChar = HxOverrides.cca(this.input,tempIndex + 1);
+				if(nextChar == 47) {
+					tempIndex += 2;
+					while(tempIndex < this.length && HxOverrides.cca(this.input,tempIndex) != 10) ++tempIndex;
+					continue;
+				}
+				if(nextChar == 42) {
+					tempIndex += 2;
+					while(tempIndex + 1 < this.length) {
+						if(HxOverrides.cca(this.input,tempIndex) == 42 && HxOverrides.cca(this.input,tempIndex + 1) == 47) {
+							tempIndex += 2;
+							break;
+						}
+						++tempIndex;
+					}
+					continue;
+				}
+			}
+			if(tempIndex + 1 < this.length && HxOverrides.cca(this.input,tempIndex) == 105 && HxOverrides.cca(this.input,tempIndex + 1) == 102) {
+				if(tempIndex + 2 >= this.length || !this.isAlphaNumeric(HxOverrides.cca(this.input,tempIndex + 2))) {
+					return true;
+				}
+			}
+			return false;
+		}
+		return false;
+	}
+	,endsWithControlKeyword: function(line,pos) {
+		var trimmed = StringTools.rtrim(line);
+		if(trimmed.length == 0) {
+			return false;
+		}
+		var _g = 0;
+		var _g1 = loreline_CodeToHscript.CONTROL_KEYWORDS;
+		while(_g < _g1.length) {
+			var keyword = _g1[_g];
+			++_g;
+			if(StringTools.endsWith(trimmed,keyword)) {
+				var trimmedSize = line.length - trimmed.length;
+				var keywordPos = trimmed.length - keyword.length;
+				var hasValidPrefix = keywordPos == 0 || !this.isAlphaNumeric(HxOverrides.cca(trimmed,keywordPos - 1));
+				var nextPos = pos;
+				var hasValidSuffix = nextPos < this.length && (trimmedSize > 0 || !this.isAlphaNumeric(HxOverrides.cca(this.input,nextPos)));
+				if(hasValidPrefix && hasValidSuffix) {
+					if(keyword != "else" || !this.followsWithIf(pos)) {
+						return true;
+					}
+				}
+			}
+		}
+		return false;
+	}
+	,endsWithArrayIndexable: function(line) {
+		var length = line.length;
+		if(length == 0) {
+			return false;
+		}
+		var lastNonWhitespacePos = length - 1;
+		while(lastNonWhitespacePos >= 0) {
+			var c = HxOverrides.cca(line,lastNonWhitespacePos);
+			if(!this.isWhitespace(c)) {
+				break;
+			}
+			--lastNonWhitespacePos;
+		}
+		if(lastNonWhitespacePos < 0) {
+			return false;
+		}
+		var lastChar = HxOverrides.cca(line,lastNonWhitespacePos);
+		if(!(lastChar == 41 || lastChar == 125 || lastChar == 93)) {
+			return this.isAlphaNumeric(lastChar);
+		} else {
+			return true;
+		}
+	}
+	,isWhitespace: function(c) {
+		if(!(c == 32 || c == 10 || c == 9)) {
+			return c == 13;
+		} else {
+			return true;
+		}
+	}
+	,isAlphaNumeric: function(c) {
+		if(!(c >= 97 && c <= 122 || c >= 65 && c <= 90 || c >= 48 && c <= 57)) {
+			return c == 95;
+		} else {
+			return true;
+		}
+	}
+	,inStatementsBlock: function() {
+		var i = this.stack.length - 1;
+		if(i >= 0) {
+			if(this.stack[i] != 2) {
+				return this.stack[i] == 3;
+			} else {
+				return true;
+			}
+		}
+		return true;
+	}
+	,inObjectBlock: function() {
+		var i = this.stack.length - 1;
+		while(i >= 0) {
+			if(this.stack[i] != 3) {
+				var res = this.stack[i] == 0;
+				return res;
+			}
+			--i;
+		}
+		return false;
+	}
+	,inArrayBlock: function() {
+		var i = this.stack.length - 1;
+		while(i >= 0) {
+			if(this.stack[i] != 3) {
+				var res = this.stack[i] == 1;
+				return res;
+			}
+			--i;
+		}
+		return false;
+	}
+	,isLabelStart: function(pos) {
+		pos = this.skipWhitespaceAndComments(pos);
+		var c = HxOverrides.cca(this.input,pos);
+		if(!(c >= 97 && c <= 122 || c >= 65 && c <= 90 || c == 95)) {
+			return false;
+		}
+		var startPos = pos;
+		++pos;
+		while(true) {
+			var tmp;
+			if(pos < this.length) {
+				var c = HxOverrides.cca(this.input,pos);
+				tmp = c >= 97 && c <= 122 || c >= 65 && c <= 90 || c == 95 || c >= 48 && c <= 57;
+			} else {
+				tmp = false;
+			}
+			if(!tmp) {
+				break;
+			}
+			++pos;
+		}
+		while(pos < this.length && this.isWhitespace(HxOverrides.cca(this.input,pos))) ++pos;
+		if(pos >= this.length || HxOverrides.cca(this.input,pos) != 58) {
+			return false;
+		}
+		var word = HxOverrides.substr(this.input,startPos,pos - startPos);
+		if(word == "case") {
+			return false;
+		}
+		return true;
+	}
+	,skipWhitespaceAndComments: function(pos) {
+		var startPos = pos;
+		var foundContent = false;
+		while(pos < this.length) {
+			while(pos < this.length && (HxOverrides.cca(this.input,pos) == 32 || HxOverrides.cca(this.input,pos) == 9 || HxOverrides.cca(this.input,pos) == 10 || HxOverrides.cca(this.input,pos) == 13)) {
+				++pos;
+				foundContent = true;
+			}
+			if(pos < this.length - 1) {
+				if(HxOverrides.cca(this.input,pos) == 47) {
+					if(HxOverrides.cca(this.input,pos + 1) == 47) {
+						pos = startPos;
+						return pos;
+					} else if(HxOverrides.cca(this.input,pos + 1) == 42) {
+						pos += 2;
+						foundContent = true;
+						var commentClosed = false;
+						while(pos < this.length - 1) {
+							if(HxOverrides.cca(this.input,pos) == 42 && HxOverrides.cca(this.input,pos + 1) == 47) {
+								pos += 2;
+								commentClosed = true;
+								break;
+							}
+							++pos;
+						}
+						if(!commentClosed) {
+							pos = startPos;
+							return pos;
+						}
+						continue;
+					}
+				}
+			}
+			break;
+		}
+		if(foundContent) {
+			return pos;
+		} else {
+			return startPos;
+		}
+	}
+	,stackPush: function(item) {
+		this.stack.push(item);
+	}
+	,stackPop: function() {
+		return this.stack.pop();
+	}
+	,_add: function(c,incrementIndex) {
+		if(incrementIndex) {
+			this.index++;
+		} else {
+			this.currentPosOffset++;
+		}
+		if(this.inString) {
+			this.lineOutput.b += String.fromCodePoint((c == 34 ? c : 32));
+			this.output.b += String.fromCodePoint(c);
+			this.posOffsets.push(this.currentPosOffset);
+		} else if(c == 10) {
+			if(this.inControlWithoutParens) {
+				this.inControlWithoutParens = false;
+				if(this.stack.pop() != 5) {
+					this.error("Unexpected end of line");
+				}
+				this.currentPosOffset++;
+				this.lineOutput.b += String.fromCodePoint(41);
+				this.output.b += String.fromCodePoint(41);
+				this.posOffsets.push(this.currentPosOffset);
+			}
+			this.inControl = false;
+			var line = this.lineOutput.b;
+			this.lineOutput = new StringBuf();
+			if(this.inStatementsBlock() || this.inObjectBlock() || this.inArrayBlock()) {
+				var indent = this.nextLineIndentOffset(line,this.index);
+				if(StringTools.trim(line).length != 0) {
+					if(indent > 0 && !this.endsOrFollowsWithChar(line,123,this.index) && !this.endsOrFollowsWithChar(line,91,this.index)) {
+						this.stack.push(3);
+						this.indentLevel += indent;
+						this.indentStack.push(this.indentLevel);
+						this.currentPosOffset++;
+						this.output.b += String.fromCodePoint(32);
+						this.posOffsets.push(this.currentPosOffset);
+						this.currentPosOffset++;
+						this.output.b += String.fromCodePoint(123);
+						this.posOffsets.push(this.currentPosOffset);
+					} else if(indent < 0 && this.stack.length > 0 && this.stack[this.stack.length - 1] == 3) {
+						if(!this.inObjectBlock() && !this.endsOrFollowsWithChar(line,59,this.index)) {
+							this.currentPosOffset++;
+							this.output.b += String.fromCodePoint(59);
+							this.posOffsets.push(this.currentPosOffset);
+						}
+						this.indentLevel += indent;
+						var first = true;
+						while(this.indentStack[this.indentStack.length - 1] > this.indentLevel && this.stack.length > 0 && this.stack[this.stack.length - 1] == 3) {
+							this.stack.pop();
+							this.indentStack.pop();
+							if(first) {
+								first = false;
+								this.currentPosOffset++;
+								this.output.b += String.fromCodePoint(32);
+								this.posOffsets.push(this.currentPosOffset);
+							}
+							this.currentPosOffset++;
+							this.output.b += String.fromCodePoint(125);
+							this.posOffsets.push(this.currentPosOffset);
+						}
+					} else if(indent == 0 && !this.endsOrFollowsWithChar(line,59,this.index) && !this.endsOrFollowsWithChar(line,44,this.index)) {
+						if(this.inObjectBlock()) {
+							this.currentPosOffset++;
+							this.output.b += String.fromCodePoint(44);
+							this.posOffsets.push(this.currentPosOffset);
+						} else if(this.inArrayBlock()) {
+							this.currentPosOffset++;
+							this.output.b += String.fromCodePoint(44);
+							this.posOffsets.push(this.currentPosOffset);
+						} else {
+							this.currentPosOffset++;
+							this.output.b += String.fromCodePoint(59);
+							this.posOffsets.push(this.currentPosOffset);
+						}
+					}
+				}
+			}
+			this.output.b += String.fromCodePoint(c);
+			this.posOffsets.push(this.currentPosOffset);
+		} else if(!this.inControl && !this.isWhitespace(c) && this.endsWithControlKeyword(this.lineOutput.b,this.index - 1)) {
+			this.inControl = true;
+			if(!this.followsWithChar(40,this.index)) {
+				this.inControlWithoutParens = true;
+				this.stack.push(5);
+				this.currentPosOffset++;
+				this.lineOutput.b += String.fromCodePoint(c);
+				this.output.b += String.fromCodePoint(40);
+				this.posOffsets.push(this.currentPosOffset);
+			}
+			this.lineOutput.b += String.fromCodePoint(c);
+			this.output.b += String.fromCodePoint(c);
+			this.posOffsets.push(this.currentPosOffset);
+		} else {
+			if(c == 40) {
+				this.stack.push(5);
+			} else if(c == 41) {
+				if(this.stack.pop() != 5) {
+					this.error("Unexpected: )");
+				}
+			} else if(c == 91) {
+				if(!this.endsWithArrayIndexable(this.lineOutput.b)) {
+					this.stack.push(1);
+				} else {
+					this.stack.push(4);
+				}
+			} else if(c == 93) {
+				var popped = this.stack.pop();
+				if(popped != 4 && popped != 1) {
+					this.error("Unexpected: ]");
+				}
+			} else if(c == 123) {
+				if(this.isLabelStart(this.index)) {
+					this.stack.push(0);
+				} else {
+					this.stack.push(2);
+				}
+			} else if(c == 125) {
+				var popped = this.stack.pop();
+				if(popped != 2 && popped != 0) {
+					this.error("Unexpected: }");
+				}
+			}
+			this.lineOutput.b += String.fromCodePoint(c);
+			this.output.b += String.fromCodePoint(c);
+			this.posOffsets.push(this.currentPosOffset);
+		}
+	}
+	,error: function(message) {
+		throw haxe_Exception.thrown(new loreline_Error(message,loreline_Position.fromContentAndIndex(this.input,this.index)));
+	}
+	,__class__: loreline_CodeToHscript
 };
 var loreline_Error = function(message,pos) {
 	this.message = message;
@@ -2113,6 +13135,116 @@ loreline_Error.prototype = {
 		return "" + this.message + " at " + this.pos.toString();
 	}
 	,__class__: loreline_Error
+};
+var loreline__$Imports_ImportsLoopInfo = function(finished) {
+	this.finished = finished;
+};
+loreline__$Imports_ImportsLoopInfo.__name__ = "loreline._Imports.ImportsLoopInfo";
+loreline__$Imports_ImportsLoopInfo.prototype = {
+	__class__: loreline__$Imports_ImportsLoopInfo
+};
+var loreline_Imports = function(rootPath,tokens,handleFile,handleError) {
+	this.pendingImports = 0;
+	this.hasErrors = false;
+	this.done = null;
+	this.resolvedImports = null;
+	this.autoAddExtension = true;
+	this.rootPath = rootPath;
+	this.tokens = tokens;
+	this.handleFile = handleFile;
+	this.handleError = handleError;
+};
+loreline_Imports.__name__ = "loreline.Imports";
+loreline_Imports.prototype = {
+	resolve: function(done) {
+		this.done = done;
+		this.hasErrors = false;
+		this.pendingImports = 0;
+		var resolvedImports = new haxe_ds_StringMap();
+		var toImport = [];
+		var visitedImports = new haxe_ds_StringMap();
+		var cwd = haxe_io_Path.directory(this.rootPath);
+		this.extractImports(cwd,this.tokens,toImport,visitedImports);
+		this.processImports(toImport,visitedImports,resolvedImports);
+	}
+	,processImports: function(toImport,visitedImports,resolvedImports) {
+		var loopInfo = new loreline__$Imports_ImportsLoopInfo(false);
+		while(toImport.length > 0) {
+			var item = toImport.shift();
+			this.handleItemInLoop(item,loopInfo,toImport,visitedImports,resolvedImports);
+		}
+		loopInfo.finished = true;
+		if(this.pendingImports == 0 && this.done != null) {
+			this.resolvedImports = resolvedImports;
+			this.done(this.hasErrors,resolvedImports);
+			this.done = null;
+		}
+	}
+	,handleItemInLoop: function(item,loopInfo,toImport,visitedImports,resolvedImports) {
+		var _gthis = this;
+		this.handleFile(item,function(data) {
+			_gthis.pendingImports--;
+			if(data != null) {
+				try {
+					var lexer = new loreline_Lexer(data);
+					var tokens = lexer.tokenize();
+					var lexerErrors = lexer.getErrors();
+					if(lexerErrors != null && lexerErrors.length > 0) {
+						_gthis.handleError(lexerErrors[0]);
+					}
+					resolvedImports.h[item] = tokens;
+					_gthis.extractImports(haxe_io_Path.directory(item),tokens,toImport,visitedImports);
+					if(loopInfo.finished) {
+						_gthis.processImports(toImport,visitedImports,resolvedImports);
+					}
+				} catch( _g ) {
+					var e = haxe_Exception.caught(_g).unwrap();
+					_gthis.hasErrors = true;
+					if(((e) instanceof loreline_Error)) {
+						_gthis.handleError(e);
+					} else {
+						throw haxe_Exception.thrown(e);
+					}
+				}
+			} else {
+				_gthis.hasErrors = true;
+			}
+			if(loopInfo.finished && _gthis.pendingImports == 0 && _gthis.done != null) {
+				_gthis.resolvedImports = resolvedImports;
+				_gthis.done(_gthis.hasErrors,resolvedImports);
+				_gthis.done = null;
+			}
+		});
+	}
+	,extractImports: function(cwd,tokens,toImport,visitedImports) {
+		var i = 0;
+		var len = tokens.length;
+		while(i < len - 1) {
+			if(tokens[i].type == loreline_TokenType.KwImport) {
+				var _g = tokens[i + 1].type;
+				if(_g._hx_index == 9) {
+					var _g1 = _g.quotes;
+					var _g2 = _g.attachments;
+					var s = _g.s;
+					var path = s;
+					if(!haxe_io_Path.isAbsolute(s)) {
+						path = haxe_io_Path.join([cwd,path]);
+					}
+					path = haxe_io_Path.normalize(path);
+					if(!StringTools.endsWith(path.toLowerCase(),".lor")) {
+						path += ".lor";
+					}
+					if(!Object.prototype.hasOwnProperty.call(visitedImports.h,path)) {
+						this.pendingImports++;
+						visitedImports.h[path] = true;
+						toImport.push(path);
+					}
+				}
+			}
+			++i;
+		}
+	}
+	,__class__: loreline_Imports
 };
 var loreline_Int64Map = function() {
 	this.mask = 0;
@@ -2399,7 +13531,113 @@ loreline_Reference.__name__ = "loreline.Reference";
 loreline_Reference.prototype = {
 	__class__: loreline_Reference
 };
+var loreline_FuncHscript = function(func) {
+	this.error = null;
+	this.expr = null;
+	this.hscript = null;
+	this.func = func;
+	this.codeToHscript = new loreline_CodeToHscript();
+	try {
+		this.hscript = this.codeToHscript.process(func.code);
+	} catch( _g ) {
+		var e = haxe_Exception.caught(_g).unwrap();
+		if(((e) instanceof loreline_Error)) {
+			this.error = e;
+			this.error.pos = func.pos.withOffset(this.codeToHscript.input,this.error.pos.offset,this.error.pos.length,func.pos.offset);
+		}
+		this.hscript = this.codeToHscript.output.b;
+	}
+	try {
+		var parser = new hscript_Parser();
+		parser.resumeErrors = false;
+		parser.allowJSON = true;
+		parser.allowTypes = true;
+		var tmp = func.name;
+		this.expr = parser.parseString(this.hscript,tmp != null ? tmp : "?");
+	} catch( _g ) {
+		var e = haxe_Exception.caught(_g).unwrap();
+		if(this.error == null) {
+			if(((e) instanceof hscript_Error)) {
+				var hscriptError = e;
+				var tmp;
+				var _g1 = hscriptError.e;
+				switch(_g1._hx_index) {
+				case 0:
+					var c = _g1.c;
+					tmp = "Invalid character: " + c;
+					break;
+				case 1:
+					var s = _g1.s;
+					tmp = "Unexpected: " + s;
+					break;
+				case 2:
+					tmp = "Unterminated string";
+					break;
+				case 3:
+					tmp = "Unterminated comment";
+					break;
+				case 4:
+					var msg = _g1.msg;
+					tmp = "Invalid preprocessor: " + msg;
+					break;
+				case 5:
+					var v = _g1.v;
+					tmp = "Unknown variable: " + v;
+					break;
+				case 6:
+					var v = _g1.v;
+					tmp = "Invalid iterator: " + v;
+					break;
+				case 7:
+					var op = _g1.op;
+					tmp = "Invalid operator: " + op;
+					break;
+				case 8:
+					var f = _g1.f;
+					tmp = "Invalid access: " + f;
+					break;
+				case 9:
+					var msg = _g1.msg;
+					tmp = msg;
+					break;
+				}
+				this.error = new loreline_WrappedError(hscriptError,tmp,this.codeToHscript.toLorelinePos(func.pos,hscriptError.pmin,hscriptError.pmax));
+			} else if(((e) instanceof loreline_Error)) {
+				this.error = e;
+				this.error.pos = func.pos.withOffset(this.codeToHscript.input,this.error.pos.offset,this.error.pos.length,func.pos.offset);
+			}
+		}
+		try {
+			var parser = new hscript_Parser();
+			parser.resumeErrors = true;
+			parser.allowJSON = true;
+			parser.allowTypes = true;
+			var tmp = func.name;
+			this.expr = parser.parseString(this.hscript,tmp != null ? tmp : "?");
+		} catch( _g1 ) {
+		}
+	}
+};
+loreline_FuncHscript.__name__ = "loreline.FuncHscript";
+loreline_FuncHscript.prototype = {
+	__class__: loreline_FuncHscript
+};
+var loreline_HscriptCompletion = function(locals,completion) {
+	this.completion = null;
+	this.locals = null;
+	if(locals != null) {
+		this.locals = locals;
+	}
+	if(completion != null) {
+		this.completion = completion;
+	}
+};
+loreline_HscriptCompletion.__name__ = "loreline.HscriptCompletion";
+loreline_HscriptCompletion.prototype = {
+	__class__: loreline_HscriptCompletion
+};
 var loreline_Lens = function(script) {
+	this.hscriptFunctions = new loreline_NodeIdMap();
 	this.childNodes = new loreline_NodeIdMap();
 	this.parentNodes = new loreline_NodeIdMap();
 	this.nodesById = new loreline_NodeIdMap();
@@ -2433,7 +13671,7 @@ loreline_Lens.prototype = {
 	}
 	,getNodeAtPosition: function(pos) {
 		var bestMatch = null;
-		this.script.each(function(node,parent) {
+		this.script.eachExcludingImported(function(node,parent) {
 			var nodePos = node.pos;
 			if(nodePos.length > 0 && nodePos.offset <= pos.offset && nodePos.offset + nodePos.length >= pos.offset) {
 				bestMatch = node;
@@ -2444,7 +13682,7 @@ loreline_Lens.prototype = {
 	,getClosestNodeAtOrBeforePosition: function(pos) {
 		var bestMatch = null;
 		var bestDistance = 999999999;
-		this.script.each(function(node,parent) {
+		this.script.eachExcludingImported(function(node,parent) {
 			var nodePos = node.pos;
 			var distance = pos.offset - nodePos.offset;
 			if(distance >= 0 && distance < bestDistance) {
@@ -2454,11 +13692,20 @@ loreline_Lens.prototype = {
 		});
 		return bestMatch;
 	}
-	,getNodesOfType: function(nodeType) {
+	,getNodesOfType: function(nodeType,includeImported) {
+		if(includeImported == null) {
+			includeImported = false;
+		}
+		var _gthis = this;
 		var matches = [];
-		this.script.each(function(node,_) {
+		this.traverse(this.script,function(node,parent) {
 			if(js_Boot.__instanceof(node,nodeType)) {
 				matches.push(node);
+			}
+			if(!(includeImported || node == _gthis.script)) {
+				return !(((node) instanceof loreline_NImportStatement) || ((node) instanceof loreline_Script));
+			} else {
+				return true;
 			}
 		});
 		return matches;
@@ -2477,26 +13724,41 @@ loreline_Lens.prototype = {
 		}
 		return null;
 	}
-	,getAncestors: function(node) {
-		var ancestors = [];
-		var current = node;
-		while(current != null) {
-			var key = current.id;
-			current = this.parentNodes.map._get(key.high,key.low);
-			if(current != null) {
-				ancestors.push(current);
+	,getImportedPaths: function(rootPath) {
+		var result = [];
+		this._getImportedPaths(rootPath,this.script,result,new haxe_ds_StringMap());
+		return result;
+	}
+	,_getImportedPaths: function(rootPath,script,result,used) {
+		var rootDir = haxe_io_Path.directory(rootPath);
+		if(script == null) {
+			script = this.script;
+		}
+		var _g = 0;
+		var _g1 = script.body;
+		while(_g < _g1.length) {
+			var node = _g1[_g];
+			++_g;
+			if(((node) instanceof loreline_NImportStatement)) {
+				var importNode = node;
+				var importPath = importNode.path;
+				if(!haxe_io_Path.isAbsolute(importPath)) {
+					importPath = haxe_io_Path.join([rootDir,importPath]);
+				}
+				importPath = haxe_io_Path.normalize(importPath);
+				if(!StringTools.endsWith(importPath.toLowerCase(),".lor")) {
+					importPath += ".lor";
+				}
+				if(!Object.prototype.hasOwnProperty.call(used.h,importPath)) {
+					used.h[importPath] = true;
+					result.push(importPath);
+					if(importNode.script != null) {
+						this._getImportedPaths(importPath,importNode.script,result,used);
+					}
+				}
 			}
 		}
-		return ancestors;
-	}
-	,findNodes: function(predicate) {
-		var matches = [];
-		this.script.each(function(node,_) {
-			if(predicate(node)) {
-				matches.push(node);
-			}
-		});
-		return matches;
+		return result;
 	}
 	,resolveArrayAccess: function(access) {
 		var targetNode = null;
@@ -2644,7 +13906,11 @@ loreline_Lens.prototype = {
 					}
 				}
 			}
-			return false;
+			if(!((node) instanceof loreline_NImportStatement)) {
+				return ((node) instanceof loreline_Script);
+			} else {
+				return true;
+			}
 		});
 		if(stateField != null) {
 			return stateField;
@@ -2656,6 +13922,10 @@ loreline_Lens.prototype = {
 		var beatDecl = this.findBeatByNameFromNode(name,access);
 		if(beatDecl != null) {
 			return beatDecl;
+		}
+		var functionDecl = this.findFunctionByNameFromNode(name,access);
+		if(functionDecl != null) {
+			return functionDecl;
 		}
 		return null;
 	}
@@ -2719,7 +13989,11 @@ loreline_Lens.prototype = {
 						result = beatDecl;
 					}
 				}
-				return false;
+				if(!((child) instanceof loreline_NImportStatement)) {
+					return ((child) instanceof loreline_Script);
+				} else {
+					return true;
+				}
 			});
 		}
 		return result;
@@ -2736,25 +14010,54 @@ loreline_Lens.prototype = {
 					result = characterDecl;
 				}
 			}
-			return false;
+			if(!((child) instanceof loreline_NImportStatement)) {
+				return ((child) instanceof loreline_Script);
+			} else {
+				return true;
+			}
+		});
+		return result;
+	}
+	,findFunctionByNameFromNode: function(name,node) {
+		var result = null;
+		this.traverse(this.script,function(child,parent) {
+			if(result == null && ((child) instanceof loreline_NFunctionDecl)) {
+				var functionDecl = child;
+				if(functionDecl.name == name) {
+					result = functionDecl;
+				}
+			}
+			if(!((child) instanceof loreline_NImportStatement)) {
+				return ((child) instanceof loreline_Script);
+			} else {
+				return true;
+			}
 		});
 		return result;
 	}
 	,getVisibleCharacters: function() {
 		var result = [];
-		var _g = 0;
-		var _g1 = this.script.body;
-		while(_g < _g1.length) {
-			var node = _g1[_g];
-			++_g;
-			if(((node) instanceof loreline_NCharacterDecl)) {
-				result.push(node);
+		var node = this.script.iterator();
+		while(node.hasNext()) {
+			var node1 = node.next();
+			if(((node1) instanceof loreline_NCharacterDecl)) {
+				result.push(node1);
+			}
+		}
+		return result;
+	}
+	,getVisibleFunctions: function() {
+		var result = [];
+		var node = this.script.iterator();
+		while(node.hasNext()) {
+			var node1 = node.next();
+			if(((node1) instanceof loreline_NFunctionDecl)) {
+				result.push(node1);
 			}
 		}
 		return result;
 	}
 	,getVisibleStateFields: function(fromNode) {
-		var _gthis = this;
 		var fields = [];
 		var seenFields_map = new loreline_Int64Map();
 		var current = fromNode;
@@ -2780,7 +14083,7 @@ loreline_Lens.prototype = {
 		this.script.each(function(node,parent) {
 			if(js_Boot.getClass(node) == loreline_NStateDecl) {
 				var state = node;
-				if(parent == _gthis.script) {
+				if(((parent) instanceof loreline_Script)) {
 					var _g = 0;
 					var _g1 = state.fields;
 					while(_g < _g1.length) {
@@ -2799,7 +14102,6 @@ loreline_Lens.prototype = {
 		return fields;
 	}
 	,getVisibleBeats: function(fromNode) {
-		var _gthis = this;
 		var beats = [];
 		var seenBeats_h = Object.create(null);
 		var current = this.getParentNode(fromNode);
@@ -2823,7 +14125,7 @@ loreline_Lens.prototype = {
 		}
 		this.script.each(function(node,parent) {
 			if(js_Boot.getClass(node) == loreline_NBeatDecl) {
-				if(parent == _gthis.script) {
+				if(((parent) instanceof loreline_Script)) {
 					var beat = node;
 					if(!Object.prototype.hasOwnProperty.call(seenBeats_h,beat.name)) {
 						seenBeats_h[beat.name] = true;
@@ -3216,6 +14518,179 @@ loreline_Lens.prototype = {
 				}
 			}
 		}
+	}
+	,getFuncHscript: function(func) {
+		var id = func.id;
+		var key = id;
+		var info = this.hscriptFunctions.map._get(key.high,key.low);
+		if(info == null) {
+			info = new loreline_FuncHscript(func);
+			var key = id;
+			this.hscriptFunctions.map._set(key.high,key.low,info);
+		}
+		return info;
+	}
+	,getHscriptExpr: function(func,pos) {
+		var info = this.getFuncHscript(func);
+		if(info.expr == null) {
+			return null;
+		}
+		var offset = pos.offset - func.pos.offset;
+		var bestExpr = null;
+		var handler = null;
+		handler = function(expr) {
+			if(expr != null) {
+				var min = info.codeToHscript.inputPosFromProcessedPos(expr.pmin);
+				var max = info.codeToHscript.inputPosFromProcessedPos(expr.pmax);
+				if(offset >= min && offset <= max) {
+					bestExpr = expr;
+				}
+				hscript_Tools.iter(expr,handler);
+			}
+		};
+		hscript_Tools.iter(info.expr,handler);
+		return bestExpr;
+	}
+	,resolveHscriptAccess: function(func,expr) {
+		var _g = expr.e;
+		switch(_g._hx_index) {
+		case 1:
+			var name = _g.v;
+			var stateField = null;
+			this.traverse(this.script,function(node,parent) {
+				if(stateField != null) {
+					return false;
+				}
+				if(((node) instanceof loreline_NStateDecl)) {
+					var stateDecl = node;
+					var _g = 0;
+					var _g1 = stateDecl.fields;
+					while(_g < _g1.length) {
+						var field = _g1[_g];
+						++_g;
+						if(field.name == name) {
+							stateField = field;
+							return false;
+						}
+					}
+				}
+				if(!((node) instanceof loreline_NImportStatement)) {
+					return ((node) instanceof loreline_Script);
+				} else {
+					return true;
+				}
+			});
+			if(stateField != null) {
+				return stateField;
+			}
+			var characterDecl = this.findCharacterByNameFromNode(name,func);
+			if(characterDecl != null) {
+				return characterDecl;
+			}
+			var beatDecl = this.findBeatByNameFromNode(name,func);
+			if(beatDecl != null) {
+				return beatDecl;
+			}
+			break;
+		case 5:
+			var e = _g.e;
+			var f = _g.f;
+			var targetNode = e != null ? this.resolveHscriptAccess(func,e) : null;
+			if(targetNode != null) {
+				if(((targetNode) instanceof loreline_NObjectField)) {
+					targetNode = targetNode.value;
+				}
+				switch(js_Boot.getClass(targetNode)) {
+				case loreline_NCharacterDecl:
+					var characterDecl = targetNode;
+					var _g1 = 0;
+					var _g2 = characterDecl.fields;
+					while(_g1 < _g2.length) {
+						var prop = _g2[_g1];
+						++_g1;
+						if(prop.name == f) {
+							return prop;
+						}
+					}
+					break;
+				case loreline_NLiteral:
+					var literal = targetNode;
+					var _g1 = literal.literalType;
+					if(_g1._hx_index == 4) {
+						var style = _g1.style;
+						var fields = literal.value;
+						var _g1 = 0;
+						while(_g1 < fields.length) {
+							var field = fields[_g1];
+							++_g1;
+							if(field.name == f) {
+								return field;
+							}
+						}
+					}
+					break;
+				default:
+				}
+			}
+			break;
+		case 16:
+			var e = _g.e;
+			var index = _g.index;
+			break;
+		default:
+		}
+		return null;
+	}
+	,isHscriptExpr: function(input) {
+		if(input != null && Object.prototype.hasOwnProperty.call(input,"e")) {
+			return js_Boot.__instanceof(Reflect.field(input,"e"),hscript_ExprDef);
+		} else {
+			return false;
+		}
+	}
+	,getHscriptCompletion: function(func,pos) {
+		var info = this.getFuncHscript(func);
+		var inputPos = pos.offset - func.pos.offset + pos.length;
+		var processedPos = info.codeToHscript.processedPosFromInputPos(inputPos);
+		var truncated = info.hscript.substring(0,Math.min(processedPos,info.hscript.length) | 0);
+		var fullLen = truncated.length;
+		truncated = truncated.substring(truncated.indexOf("{",null) + 1,fullLen);
+		var truncatedLen = truncated.length;
+		var spaces_b = "";
+		var _g = 0;
+		var _g1 = fullLen - truncatedLen;
+		while(_g < _g1) {
+			var i = _g++;
+			spaces_b += String.fromCodePoint(32);
+		}
+		truncated = spaces_b + truncated;
+		var completion = null;
+		var checker = new hscript_Checker();
+		try {
+			checker.types.parser.allowJSON = true;
+			checker.types.parser.allowTypes = true;
+			checker.types.parser.resumeErrors = true;
+			var expr = checker.types.parser.parseString(truncated);
+			checker.check(expr,null,true);
+		} catch( _g ) {
+			var e = haxe_Exception.caught(_g).unwrap();
+			if(((e) instanceof hscript_Completion)) {
+				completion = e;
+			}
+		}
+		var locals = checker.locals;
+		return new loreline_HscriptCompletion(locals,completion);
+	}
+	,resolveAccessInFunction: function(func,pos) {
+		var info = this.getFuncHscript(func);
+		if(info.expr == null) {
+			return null;
+		}
+		var expr = this.getHscriptExpr(func,pos);
+		if(expr != null) {
+			return this.resolveHscriptAccess(func,expr);
+		}
+		return null;
 	}
 	,__class__: loreline_Lens
 };
@@ -3697,6 +15172,131 @@ loreline_TokenTypeHelpers.isBlockStart = function(a) {
 		return false;
 	}
 };
+loreline_TokenTypeHelpers.toCodeString = function(a) {
+	switch(a._hx_index) {
+	case 0:
+		return "import";
+	case 1:
+		return "state";
+	case 2:
+		return "beat";
+	case 3:
+		return "character";
+	case 4:
+		return "choice";
+	case 5:
+		return "if";
+	case 6:
+		return "else";
+	case 7:
+		return "new";
+	case 8:
+		var _g = a.name;
+		var _g = a.args;
+		var _g = a.code;
+		return "function";
+	case 9:
+		var _g = a.quotes;
+		var _g = a.s;
+		var _g = a.attachments;
+		return "string";
+	case 10:
+		var _g = a.n;
+		return "number";
+	case 11:
+		var _g = a.b;
+		return "boolean";
+	case 12:
+		return "null";
+	case 13:
+		var name = a.name;
+		return "identifier";
+	case 14:
+		return "=";
+	case 15:
+		return "+=";
+	case 16:
+		return "-=";
+	case 17:
+		return "*=";
+	case 18:
+		return "/=";
+	case 19:
+		return "+";
+	case 20:
+		return "-";
+	case 21:
+		return "*";
+	case 22:
+		return "/";
+	case 23:
+		return "%";
+	case 24:
+		return "==";
+	case 25:
+		return "!=";
+	case 26:
+		return ">";
+	case 27:
+		return "<";
+	case 28:
+		return ">=";
+	case 29:
+		return "<=";
+	case 30:
+		var word = a.word;
+		if(word) {
+			return "and";
+		} else {
+			return "&&";
+		}
+		break;
+	case 31:
+		var word = a.word;
+		if(word) {
+			return "or";
+		} else {
+			return "||";
+		}
+		break;
+	case 32:
+		return "!";
+	case 33:
+		return "->";
+	case 34:
+		return ":";
+	case 35:
+		return ",";
+	case 36:
+		return ".";
+	case 37:
+		return "{";
+	case 38:
+		return "}";
+	case 39:
+		return "(";
+	case 40:
+		return ")";
+	case 41:
+		return "[";
+	case 42:
+		return "]";
+	case 43:
+		var content = a.content;
+		return "comment";
+	case 44:
+		var content = a.content;
+		return "multiline comment";
+	case 45:
+		return "indent";
+	case 46:
+		return "unindent";
+	case 47:
+		return "line break";
+	case 48:
+		return "end of file";
+	}
+};
 var loreline_Token = function(type,pos) {
 	this.type = type;
 	this.pos = pos;
@@ -3917,6 +15517,9 @@ loreline_Lexer.prototype = {
 			return lineBreakToken;
 		}
 		var startPos = new loreline_Position(this.startLine,this.startColumn,this.pos);
+		if(this.tokenized.length > 0 && this.tokenized[this.tokenized.length - 1].type == loreline_TokenType.KwImport) {
+			return this.readImportValue(c,startPos);
+		}
 		if(c == null) {
 			var tmp = this.tryReadUnquotedString();
 			if(tmp != null) {
@@ -6326,6 +17929,30 @@ loreline_Lexer.prototype = {
 			return false;
 		}
 	}
+	,readImportValue: function(c,startPos) {
+		if(c == 34) {
+			return this.readString(startPos);
+		} else {
+			var buf_b = "";
+			while(this.pos < this.length) {
+				var cc = HxOverrides.cca(this.input,this.pos);
+				if(cc == 10) {
+					break;
+				}
+				buf_b += String.fromCodePoint(cc);
+				this.pos++;
+			}
+			var value = StringTools.rtrim(buf_b);
+			var position = new loreline_Position(startPos.line,startPos.column,startPos.offset,value.length);
+			if(position == null) {
+				position = new loreline_Position(this.startLine,this.startColumn,this.pos);
+			}
+			position.length = this.pos - position.offset;
+			var token = new loreline_Token(loreline_TokenType.LString(0,value,[]),position);
+			this.previous = token;
+			return token;
+		}
+	}
 	,tryReadUnquotedString: function() {
 		if(this.isStrict()) {
 			return null;
@@ -6880,22 +18507,41 @@ loreline_Lexer.prototype = {
 		this.column = savedColumn;
 		return token;
 	}
-	,readFieldAccessInterpolation: function(stringStart) {
+	,readFieldAccessInterpolation: function(interpStart) {
+		this.strictExprs.push(1);
 		var tokens = [];
 		var c = HxOverrides.cca(this.input,this.pos);
 		if(!(c >= 97 && c <= 122 || c >= 65 && c <= 90 || c == 95)) {
 			this.error("Expected identifier in field access",true);
 		}
-		tokens.push(this.readIdentifierTokenInInterpolation(stringStart));
-		_hx_loop1: while(this.pos < this.length) {
+		var idStartPos = this.pos;
+		while(this.pos < this.length) {
+			var c = HxOverrides.cca(this.input,this.pos);
+			if(!(c >= 97 && c <= 122 || c >= 65 && c <= 90 || c == 95 || c >= 48 && c <= 57)) {
+				break;
+			}
+			var count = 1;
+			while(count-- > 0 && this.pos < this.length) {
+				if(HxOverrides.cca(this.input,this.pos) == 10) {
+					this.line++;
+					this.column = 1;
+				} else {
+					this.column++;
+				}
+				this.pos++;
+			}
+		}
+		var name = HxOverrides.substr(this.input,idStartPos,this.pos - idStartPos);
+		var tokenType = Object.prototype.hasOwnProperty.call(loreline_Lexer.KEYWORDS.h,name) ? loreline_Lexer.KEYWORDS.h[name] : loreline_TokenType.Identifier(name);
+		tokens.push(new loreline_Token(tokenType,new loreline_Position(interpStart.line,interpStart.column,idStartPos,this.pos - idStartPos)));
+		_hx_loop3: while(this.pos < this.length) {
 			var _g = HxOverrides.cca(this.input,this.pos);
 			if(_g == null) {
 				break;
 			} else {
 				switch(_g) {
 				case 40:
-					var parenPos = this.makePositionRelativeTo(stringStart);
-					tokens.push(new loreline_Token(loreline_TokenType.LParen,parenPos));
+					tokens.push(new loreline_Token(loreline_TokenType.LParen,new loreline_Position(this.line,this.column,this.pos,1)));
 					var count = 1;
 					while(count-- > 0 && this.pos < this.length) {
 						if(HxOverrides.cca(this.input,this.pos) == 10) {
@@ -6913,8 +18559,7 @@ loreline_Lexer.prototype = {
 						if(HxOverrides.cca(this.input,this.pos) == 41) {
 							--parenLevel;
 							if(parenLevel == 0) {
-								var closeParenPos = this.makePositionRelativeTo(stringStart);
-								tokens.push(new loreline_Token(loreline_TokenType.RParen,closeParenPos));
+								tokens.push(new loreline_Token(loreline_TokenType.RParen,new loreline_Position(this.line,this.column,this.pos,1)));
 								var count1 = 1;
 								while(count1-- > 0 && this.pos < this.length) {
 									if(HxOverrides.cca(this.input,this.pos) == 10) {
@@ -6933,8 +18578,7 @@ loreline_Lexer.prototype = {
 							++parenLevel;
 						}
 						if(HxOverrides.cca(this.input,this.pos) == 44) {
-							var commaPos = this.makePositionRelativeTo(stringStart);
-							tokens.push(new loreline_Token(loreline_TokenType.Comma,commaPos));
+							tokens.push(new loreline_Token(loreline_TokenType.Comma,new loreline_Position(this.line,this.column,this.pos,1)));
 							var count2 = 1;
 							while(count2-- > 0 && this.pos < this.length) {
 								if(HxOverrides.cca(this.input,this.pos) == 10) {
@@ -6946,7 +18590,7 @@ loreline_Lexer.prototype = {
 								this.pos++;
 							}
 						} else {
-							tokens.push(this.nextTokenWithPosition(stringStart));
+							tokens.push(this.nextToken());
 						}
 					}
 					if(parenLevel > 0) {
@@ -6962,7 +18606,7 @@ loreline_Lexer.prototype = {
 						tmp = false;
 					}
 					if(tmp) {
-						var dotPos = this.makePositionRelativeTo(stringStart);
+						tokens.push(new loreline_Token(loreline_TokenType.Dot,new loreline_Position(this.line,this.column,this.pos,1)));
 						var count3 = 1;
 						while(count3-- > 0 && this.pos < this.length) {
 							if(HxOverrides.cca(this.input,this.pos) == 10) {
@@ -6973,17 +18617,34 @@ loreline_Lexer.prototype = {
 							}
 							this.pos++;
 						}
-						tokens.push(new loreline_Token(loreline_TokenType.Dot,dotPos));
-						tokens.push(this.readIdentifierTokenInInterpolation(stringStart));
+						var idStartPos = this.pos;
+						while(this.pos < this.length) {
+							var c1 = HxOverrides.cca(this.input,this.pos);
+							if(!(c1 >= 97 && c1 <= 122 || c1 >= 65 && c1 <= 90 || c1 == 95 || c1 >= 48 && c1 <= 57)) {
+								break;
+							}
+							var count4 = 1;
+							while(count4-- > 0 && this.pos < this.length) {
+								if(HxOverrides.cca(this.input,this.pos) == 10) {
+									this.line++;
+									this.column = 1;
+								} else {
+									this.column++;
+								}
+								this.pos++;
+							}
+						}
+						var name = HxOverrides.substr(this.input,idStartPos,this.pos - idStartPos);
+						var tokenType = Object.prototype.hasOwnProperty.call(loreline_Lexer.KEYWORDS.h,name) ? loreline_Lexer.KEYWORDS.h[name] : loreline_TokenType.Identifier(name);
+						tokens.push(new loreline_Token(tokenType,new loreline_Position(this.line,this.column - (this.pos - idStartPos),idStartPos)));
 					} else {
-						break _hx_loop1;
+						break _hx_loop3;
 					}
 					break;
 				case 91:
-					var bracketPos = this.makePositionRelativeTo(stringStart);
-					tokens.push(new loreline_Token(loreline_TokenType.LBracket,bracketPos));
-					var count4 = 1;
-					while(count4-- > 0 && this.pos < this.length) {
+					tokens.push(new loreline_Token(loreline_TokenType.LBracket,new loreline_Position(this.line,this.column,this.pos,1)));
+					var count5 = 1;
+					while(count5-- > 0 && this.pos < this.length) {
 						if(HxOverrides.cca(this.input,this.pos) == 10) {
 							this.line++;
 							this.column = 1;
@@ -6999,10 +18660,9 @@ loreline_Lexer.prototype = {
 						if(HxOverrides.cca(this.input,this.pos) == 93) {
 							--bracketLevel;
 							if(bracketLevel == 0) {
-								var closeBracketPos = this.makePositionRelativeTo(stringStart);
-								tokens.push(new loreline_Token(loreline_TokenType.RBracket,closeBracketPos));
-								var count5 = 1;
-								while(count5-- > 0 && this.pos < this.length) {
+								tokens.push(new loreline_Token(loreline_TokenType.RBracket,new loreline_Position(this.line,this.column,this.pos,1)));
+								var count6 = 1;
+								while(count6-- > 0 && this.pos < this.length) {
 									if(HxOverrides.cca(this.input,this.pos) == 10) {
 										this.line++;
 										this.column = 1;
@@ -7018,17 +18678,18 @@ loreline_Lexer.prototype = {
 						} else if(HxOverrides.cca(this.input,this.pos) == 91) {
 							++bracketLevel;
 						}
-						tokens.push(this.nextTokenWithPosition(stringStart));
+						tokens.push(this.nextToken());
 					}
 					if(bracketLevel > 0) {
 						this.error("Unterminated array access in interpolation",true);
 					}
 					break;
 				default:
-					break _hx_loop1;
+					break _hx_loop3;
 				}
 			}
 		}
+		this.strictExprs.pop();
 		return tokens;
 	}
 	,readIdentifierTokenInInterpolation: function(stringStart) {
@@ -7910,6 +19571,7 @@ loreline_Lexer.prototype = {
 	,__class__: loreline_Lexer
 };
 var loreline_NodeId = {};
+loreline_NodeId.__properties__ = {set_node:"set_node",get_node:"get_node",set_block:"set_block",get_block:"get_block",set_branch:"set_branch",get_branch:"get_branch",set_section:"set_section",get_section:"get_section"};
 loreline_NodeId._new = function(section,branch,block,node) {
 	if(section < 0 || section > 65535) {
 		throw haxe_Exception.thrown("Section value (" + section + ") should be between 0 and " + 65535);
@@ -9231,22 +20893,32 @@ loreline_NUnary.prototype = $extend(loreline_NExpr.prototype,{
 	}
 	,__class__: loreline_NUnary
 });
-var loreline_NImport = function(id,pos,path,leadingComments,trailingComments) {
+var loreline_NImportStatement = function(id,pos,path,pathPos,script,leadingComments,trailingComments) {
 	loreline_AstNode.call(this,id,pos,leadingComments,trailingComments);
 	this.path = path;
+	this.pathPos = pathPos;
+	this.script = script;
 };
-loreline_NImport.__name__ = "loreline.NImport";
-loreline_NImport.__super__ = loreline_AstNode;
-loreline_NImport.prototype = $extend(loreline_AstNode.prototype,{
-	type: function() {
+loreline_NImportStatement.__name__ = "loreline.NImportStatement";
+loreline_NImportStatement.__super__ = loreline_AstNode;
+loreline_NImportStatement.prototype = $extend(loreline_AstNode.prototype,{
+	each: function(handleNode) {
+		loreline_AstNode.prototype.each.call(this,handleNode);
+		if(this.script != null) {
+			handleNode(this.script,this);
+			this.script.each(handleNode);
+		}
+	}
+	,type: function() {
 		return "Import";
 	}
 	,toJson: function() {
 		var json = loreline_AstNode.prototype.toJson.call(this);
 		json.path = this.path;
+		json.pathPos = this.pathPos.toJson();
 		return json;
 	}
-	,__class__: loreline_NImport
+	,__class__: loreline_NImportStatement
 });
 var loreline_ParseError = function(message,pos) {
 	loreline_Error.call(this,message,pos);
@@ -9256,7 +20928,20 @@ loreline_ParseError.__super__ = loreline_Error;
 loreline_ParseError.prototype = $extend(loreline_Error.prototype,{
 	__class__: loreline_ParseError
 });
-var loreline_Parser = function(tokens) {
+var loreline_ParserContext = function(rootPath,path,imports,imported) {
+	this.imported = new haxe_ds_StringMap();
+	this.rootPath = rootPath;
+	this.path = path;
+	this.imports = imports;
+	if(imported != null) {
+		this.imported = imported;
+	}
+};
+loreline_ParserContext.__name__ = "loreline.ParserContext";
+loreline_ParserContext.prototype = {
+	__class__: loreline_ParserContext
+};
+var loreline_Parser = function(tokens,context) {
 	this.tokens = tokens;
 	this.current = 0;
 	this.errors = null;
@@ -9266,6 +20951,7 @@ var loreline_Parser = function(tokens) {
 	this.lineBreakAfterToken = false;
 	this.currentNodeId = loreline_NodeId.UNDEFINED;
 	this.rootBeat = null;
+	this.context = context;
 };
 loreline_Parser.__name__ = "loreline.Parser";
 loreline_Parser.prototype = {
@@ -9575,7 +21261,7 @@ loreline_Parser.prototype = {
 			if(topLevel) {
 				return this.parseCharacterDecl();
 			} else {
-				this.addError(new loreline_ParseError("Unexpected token: " + Std.string(this.tokens[this.current].type),this.currentPos()));
+				this.addError(new loreline_ParseError("Unexpected: " + loreline_TokenTypeHelpers.toCodeString(this.tokens[this.current].type),this.currentPos()));
 				this.advance();
 				return new loreline_NLiteral(this.nextNodeId(4),this.currentPos(),null,loreline_LiteralType.Null);
 			}
@@ -9612,7 +21298,14 @@ loreline_Parser.prototype = {
 			var _g1 = _g.name;
 			var _g1 = _g.args;
 			var _g1 = _g.code;
-			return this.parseFunction();
+			if(topLevel) {
+				return this.parseFunction();
+			} else {
+				this.addError(new loreline_ParseError("Unexpected: " + loreline_TokenTypeHelpers.toCodeString(this.tokens[this.current].type),this.currentPos()));
+				this.advance();
+				return new loreline_NLiteral(this.nextNodeId(4),this.currentPos(),null,loreline_LiteralType.Null);
+			}
+			break;
 		case 9:
 			var _g1 = _g.quotes;
 			var _g1 = _g.s;
@@ -9654,7 +21347,7 @@ loreline_Parser.prototype = {
 			}
 			break;
 		default:
-			this.addError(new loreline_ParseError("Unexpected token: " + Std.string(this.tokens[this.current].type),this.currentPos()));
+			this.addError(new loreline_ParseError("Unexpected: " + loreline_TokenTypeHelpers.toCodeString(this.tokens[this.current].type),this.currentPos()));
 			this.advance();
 			return new loreline_NLiteral(this.nextNodeId(4),this.currentPos(),null,loreline_LiteralType.Null);
 		}
@@ -9675,21 +21368,43 @@ loreline_Parser.prototype = {
 	}
 	,parseImport: function() {
 		var startPos = this.currentPos();
-		var imp = new loreline_NImport(this.nextNodeId(4),startPos,null);
 		this.expect(loreline_TokenType.KwImport);
-		var path;
-		var _g = this.tokens[this.current].type;
+		if(this.context == null) {
+			throw haxe_Exception.thrown(new loreline_ParseError("Cannot import without a context",this.currentPos()));
+		}
+		var pathToken = this.tokens[this.current];
+		var rawImportPath;
+		var _g = pathToken.type;
 		if(_g._hx_index == 9) {
-			var _g1 = _g.s;
+			var _g1 = _g.quotes;
 			var _g1 = _g.attachments;
-			var s = _g.quotes;
-			path = s;
+			var s = _g.s;
+			rawImportPath = s;
 		} else {
 			throw haxe_Exception.thrown(new loreline_ParseError("Expected string literal for import path",this.currentPos()));
 		}
+		var importPath = rawImportPath;
+		if(!haxe_io_Path.isAbsolute(importPath)) {
+			importPath = haxe_io_Path.join([haxe_io_Path.directory(this.context.rootPath),importPath]);
+		}
+		importPath = haxe_io_Path.normalize(importPath);
+		if(!StringTools.endsWith(importPath.toLowerCase(),".lor")) {
+			importPath += ".lor";
+		}
+		if(Object.prototype.hasOwnProperty.call(this.context.imported.h,importPath)) {
+			this.advance();
+			return this.attachComments(new loreline_NImportStatement(this.nextNodeId(1),startPos.extendedTo(this.prevNonWhitespaceOrComment().pos),rawImportPath,pathToken.pos,null));
+		}
+		var importedTokens = this.context.imports.h[importPath];
+		if(importedTokens == null) {
+			throw haxe_Exception.thrown(new loreline_ParseError("Failed to import file at path " + importPath + " (" + rawImportPath + ")",this.currentPos()));
+		}
+		var tempParser = new loreline_Parser(importedTokens,new loreline_ParserContext(this.context.rootPath,importPath,this.context.imports,this.context.imported));
+		tempParser.currentNodeId = this.currentNodeId;
+		var importedScript = tempParser.parse();
+		this.currentNodeId = tempParser.currentNodeId;
 		this.advance();
-		this.attachComments(imp);
-		return imp;
+		return this.attachComments(new loreline_NImportStatement(this.nextNodeId(1),startPos.extendedTo(this.prevNonWhitespaceOrComment().pos),rawImportPath,pathToken.pos,importedScript));
 	}
 	,parseDialogueStatement: function() {
 		var startPos = this.currentPos();
@@ -9868,7 +21583,7 @@ loreline_Parser.prototype = {
 			}
 			return indentToken;
 		} else {
-			this.addError(new loreline_ParseError("Expected " + Std.string(loreline_TokenType.LBrace) + " or " + Std.string(loreline_TokenType.Indent) + ", got " + Std.string(this.tokens[this.current].type),this.currentPos()));
+			this.addError(new loreline_ParseError("Expected " + loreline_TokenTypeHelpers.toCodeString(loreline_TokenType.LBrace) + " or " + loreline_TokenTypeHelpers.toCodeString(loreline_TokenType.Indent) + ", got " + loreline_TokenTypeHelpers.toCodeString(this.tokens[this.current].type),this.currentPos()));
 			return new loreline_Token(loreline_TokenType.Indent,this.currentPos());
 		}
 	}
@@ -10258,7 +21973,7 @@ loreline_Parser.prototype = {
 			this.advance();
 			return stringLiteral;
 		} else {
-			throw haxe_Exception.thrown(new loreline_ParseError("Expected string, got " + Std.string(this.tokens[this.current].type),this.currentPos()));
+			throw haxe_Exception.thrown(new loreline_ParseError("Expected string, got " + loreline_TokenTypeHelpers.toCodeString(this.tokens[this.current].type),this.currentPos()));
 		}
 	}
 	,makeStringPartPosition: function(stringStart,content,offset) {
@@ -10407,7 +22122,8 @@ loreline_Parser.prototype = {
 						++_g1;
 						var tempParser = new loreline_Parser(argTokenGroup);
 						tempParser.currentNodeId = this.currentNodeId;
-						args.push(tempParser.parseExpression());
+						var arg = tempParser.parseExpression();
+						args.push(arg);
 						this.currentNodeId = tempParser.currentNodeId;
 					}
 					target = this.attachComments(new loreline_NCall(this.nextNodeId(4),callStart.extendedTo(tokens[i - 1].pos),target,args));
@@ -10463,7 +22179,7 @@ loreline_Parser.prototype = {
 					prevIsDot = false;
 					break;
 				default:
-					this.addError(new loreline_ParseError("Unexpected token in field access: " + Std.string(token.type),token.pos));
+					this.addError(new loreline_ParseError("Unexpected token in field access: " + loreline_TokenTypeHelpers.toCodeString(token.type),token.pos));
 					var tmp24 = this.nextNodeId(4);
 					var tmp25 = this.nextNodeId(4);
 					var tmp26 = tokens[0];
@@ -10720,7 +22436,7 @@ loreline_Parser.prototype = {
 		if(this.check(type)) {
 			return this.advance();
 		} else {
-			var error = new loreline_ParseError("Expected " + Std.string(type) + ", got " + (this.isAtEnd() ? "EoF" : Std.string(this.tokens[this.current].type)),this.tokens[Math.min(this.current,this.tokens.length - 1) | 0].pos);
+			var error = new loreline_ParseError("Expected " + loreline_TokenTypeHelpers.toCodeString(type) + ", got " + (this.isAtEnd() ? "end of file" : loreline_TokenTypeHelpers.toCodeString(this.tokens[this.current].type)),this.tokens[Math.min(this.current,this.tokens.length - 1) | 0].pos);
 			switch(type._hx_index) {
 			case 38:case 40:case 46:
 				this.addError(error);
@@ -10746,7 +22462,7 @@ loreline_Parser.prototype = {
 			this.advance();
 			return name;
 		} else {
-			throw haxe_Exception.thrown(new loreline_ParseError("Expected identifier, got " + Std.string(this.tokens[this.current].type),this.currentPos()));
+			throw haxe_Exception.thrown(new loreline_ParseError("Expected identifier, got " + loreline_TokenTypeHelpers.toCodeString(this.tokens[this.current].type),this.currentPos()));
 		}
 	}
 	,attachComments: function(node) {
@@ -10863,6 +22579,31 @@ var loreline_Position = function(line,column,offset,length) {
 	this.length = length;
 };
 loreline_Position.__name__ = "loreline.Position";
+loreline_Position.fromContentAndIndex = function(content,offset,length) {
+	if(length == null) {
+		length = 0;
+	}
+	var line = 1;
+	var column = 1;
+	var currentOffset = 0;
+	var len = content.length;
+	if(offset > len) {
+		offset = len;
+	}
+	if(offset < 0) {
+		offset = 0;
+	}
+	while(currentOffset < offset) {
+		if(HxOverrides.cca(content,currentOffset) == 10) {
+			++line;
+			column = 1;
+		} else {
+			++column;
+		}
+		++currentOffset;
+	}
+	return new loreline_Position(line,column,offset,length);
+};
 loreline_Position.prototype = {
 	toString: function() {
 		return "(" + this.line + ":" + this.column + ":" + this.offset + ":" + this.length + ")";
@@ -10874,7 +22615,10 @@ loreline_Position.prototype = {
 		}
 		return json;
 	}
-	,withOffset: function(content,additionalOffset,newLength) {
+	,withOffset: function(content,additionalOffset,newLength,contentStart) {
+		if(contentStart == null) {
+			contentStart = 0;
+		}
 		if(newLength == null) {
 			newLength = 0;
 		}
@@ -10887,7 +22631,7 @@ loreline_Position.prototype = {
 		if(additionalOffset > 0) {
 			var chars = 0;
 			while(chars < additionalOffset) {
-				if(currentOffset < content.length && HxOverrides.cca(content,currentOffset) == 10) {
+				if(currentOffset < contentStart + content.length && HxOverrides.cca(content,currentOffset - contentStart) == 10) {
 					++currentLine;
 					currentColumn = 1;
 				} else {
@@ -10900,12 +22644,12 @@ loreline_Position.prototype = {
 			var chars = 0;
 			while(chars > additionalOffset) {
 				--currentOffset;
-				if(currentOffset >= 0 && HxOverrides.cca(content,currentOffset) == 10) {
+				if(currentOffset >= 0 && HxOverrides.cca(content,currentOffset - contentStart) == 10) {
 					--currentLine;
 					var col = 1;
 					var scanPos = currentOffset - 1;
 					while(scanPos >= 0) {
-						var c = HxOverrides.cca(content,scanPos);
+						var c = HxOverrides.cca(content,scanPos - contentStart);
 						if(c == 10) {
 							break;
 						}
@@ -11619,21 +23363,72 @@ loreline_Script.prototype = $extend(loreline_Node.prototype,{
 		json.body = _g;
 		return json;
 	}
+	,eachExcludingImported: function(handleNode) {
+		loreline_Node.prototype.each.call(this,handleNode);
+		if(this.body != null) {
+			var _g = 0;
+			var _g1 = this.body;
+			while(_g < _g1.length) {
+				var child = _g1[_g];
+				++_g;
+				handleNode(child,this);
+				if(!((child) instanceof loreline_NImportStatement)) {
+					child.each(handleNode);
+				}
+			}
+		}
+	}
 	,each: function(handleNode) {
 		loreline_Node.prototype.each.call(this,handleNode);
 		if(this.body != null) {
 			var _g = 0;
-			var _g1 = this.body.length;
-			while(_g < _g1) {
-				var i = _g++;
-				var child = this.body[i];
+			var _g1 = this.body;
+			while(_g < _g1.length) {
+				var child = _g1[_g];
+				++_g;
 				handleNode(child,this);
 				child.each(handleNode);
 			}
 		}
 	}
+	,iterator: function() {
+		return new loreline__$Script_ScriptBodyIterator(this.body);
+	}
 	,__class__: loreline_Script
 });
+var loreline__$Script_ScriptBodyIterator = function(body) {
+	this.body = body;
+	this.index = 0;
+	this.flatBody = [];
+	this.fillBody(body);
+};
+loreline__$Script_ScriptBodyIterator.__name__ = "loreline._Script.ScriptBodyIterator";
+loreline__$Script_ScriptBodyIterator.prototype = {
+	fillBody: function(body) {
+		var _g = 0;
+		var _g1 = body.length;
+		while(_g < _g1) {
+			var i = _g++;
+			var node = body[i];
+			if(((node) instanceof loreline_NImportStatement)) {
+				var importNode = node;
+				if(importNode.script != null) {
+					this.fillBody(importNode.script.body);
+				}
+			}
+			this.flatBody.push(body[i]);
+		}
+	}
+	,hasNext: function() {
+		return this.index < this.flatBody.length;
+	}
+	,next: function() {
+		var v = this.flatBody[this.index];
+		this.index++;
+		return v;
+	}
+	,__class__: loreline__$Script_ScriptBodyIterator
+};
 var loreline_Utf8 = function() { };
 loreline_Utf8.__name__ = "loreline.Utf8";
 loreline_Utf8.uLength = function(str) {
@@ -11660,6 +23455,15 @@ loreline_Utf8.uToChars = function(str) {
 loreline_Utf8.uCharAt = function(str,pos) {
 	return str.charAt(pos);
 };
+var loreline_WrappedError = function(wrapped,message,pos) {
+	loreline_Error.call(this,message,pos);
+	this.wrapped = wrapped;
+};
+loreline_WrappedError.__name__ = "loreline.WrappedError";
+loreline_WrappedError.__super__ = loreline_Error;
+loreline_WrappedError.prototype = $extend(loreline_Error.prototype,{
+	__class__: loreline_WrappedError
+});
 var loreline_lsp_URI = {};
 loreline_lsp_URI._new = function(uri) {
 	return uri;
@@ -11876,6 +23680,142 @@ loreline_lsp_SymbolPrinter.prototype = {
 	}
 	,__class__: loreline_lsp_SymbolPrinter
 };
+var sys_FileSystem = function() { };
+sys_FileSystem.__name__ = "sys.FileSystem";
+sys_FileSystem.exists = function(path) {
+	try {
+		js_node_Fs.accessSync(path);
+		return true;
+	} catch( _g ) {
+		return false;
+	}
+};
+var sys_io_FileInput = function(fd) {
+	this.hasReachedEof = false;
+	this.fd = fd;
+	this.pos = 0;
+};
+sys_io_FileInput.__name__ = "sys.io.FileInput";
+sys_io_FileInput.__super__ = haxe_io_Input;
+sys_io_FileInput.prototype = $extend(haxe_io_Input.prototype,{
+	throwEof: function() {
+		this.hasReachedEof = true;
+		throw haxe_Exception.thrown(new haxe_io_Eof());
+	}
+	,readByte: function() {
+		var buf = js_node_buffer_Buffer.alloc(1);
+		var bytesRead;
+		try {
+			bytesRead = js_node_Fs.readSync(this.fd,buf,0,1,this.pos);
+		} catch( _g ) {
+			var e = haxe_Exception.caught(_g).unwrap();
+			if(e.code == "EOF") {
+				this.hasReachedEof = true;
+				throw haxe_Exception.thrown(new haxe_io_Eof());
+			}
+			throw haxe_Exception.thrown(haxe_io_Error.Custom(e));
+		}
+		if(bytesRead == 0) {
+			this.hasReachedEof = true;
+			throw haxe_Exception.thrown(new haxe_io_Eof());
+		}
+		this.pos++;
+		return buf[0];
+	}
+	,readBytes: function(s,pos,len) {
+		var data = s.b;
+		var buf = js_node_buffer_Buffer.from(data.buffer,data.byteOffset,s.length);
+		var bytesRead;
+		try {
+			bytesRead = js_node_Fs.readSync(this.fd,buf,pos,len,this.pos);
+		} catch( _g ) {
+			var e = haxe_Exception.caught(_g).unwrap();
+			if(e.code == "EOF") {
+				this.hasReachedEof = true;
+				throw haxe_Exception.thrown(new haxe_io_Eof());
+			}
+			throw haxe_Exception.thrown(haxe_io_Error.Custom(e));
+		}
+		if(bytesRead == 0) {
+			this.hasReachedEof = true;
+			throw haxe_Exception.thrown(new haxe_io_Eof());
+		}
+		this.pos += bytesRead;
+		return bytesRead;
+	}
+	,close: function() {
+		js_node_Fs.closeSync(this.fd);
+	}
+	,seek: function(p,pos) {
+		this.hasReachedEof = false;
+		switch(pos._hx_index) {
+		case 0:
+			this.pos = p;
+			break;
+		case 1:
+			this.pos += p;
+			break;
+		case 2:
+			this.pos = js_node_Fs.fstatSync(this.fd).size + p;
+			break;
+		}
+	}
+	,tell: function() {
+		return this.pos;
+	}
+	,eof: function() {
+		return this.hasReachedEof;
+	}
+	,__class__: sys_io_FileInput
+});
+var sys_io_FileOutput = function(fd) {
+	this.fd = fd;
+	this.pos = 0;
+};
+sys_io_FileOutput.__name__ = "sys.io.FileOutput";
+sys_io_FileOutput.__super__ = haxe_io_Output;
+sys_io_FileOutput.prototype = $extend(haxe_io_Output.prototype,{
+	writeByte: function(b) {
+		var buf = js_node_buffer_Buffer.alloc(1);
+		buf[0] = b;
+		js_node_Fs.writeSync(this.fd,buf,0,1,this.pos);
+		this.pos++;
+	}
+	,writeBytes: function(s,pos,len) {
+		var data = s.b;
+		var buf = js_node_buffer_Buffer.from(data.buffer,data.byteOffset,s.length);
+		var wrote = js_node_Fs.writeSync(this.fd,buf,pos,len,this.pos);
+		this.pos += wrote;
+		return wrote;
+	}
+	,close: function() {
+		js_node_Fs.closeSync(this.fd);
+	}
+	,seek: function(p,pos) {
+		switch(pos._hx_index) {
+		case 0:
+			this.pos = p;
+			break;
+		case 1:
+			this.pos += p;
+			break;
+		case 2:
+			this.pos = js_node_Fs.fstatSync(this.fd).size + p;
+			break;
+		}
+	}
+	,tell: function() {
+		return this.pos;
+	}
+	,__class__: sys_io_FileOutput
+});
+var sys_io_FileSeek = $hxEnums["sys.io.FileSeek"] = { __ename__:true,__constructs__:null
+	,SeekBegin: {_hx_name:"SeekBegin",_hx_index:0,__enum__:"sys.io.FileSeek",toString:$estr}
+	,SeekCur: {_hx_name:"SeekCur",_hx_index:1,__enum__:"sys.io.FileSeek",toString:$estr}
+	,SeekEnd: {_hx_name:"SeekEnd",_hx_index:2,__enum__:"sys.io.FileSeek",toString:$estr}
+};
+sys_io_FileSeek.__constructs__ = [sys_io_FileSeek.SeekBegin,sys_io_FileSeek.SeekCur,sys_io_FileSeek.SeekEnd];
+function $getIterator(o) { if( o instanceof Array ) return new haxe_iterators_ArrayIterator(o); else return o.iterator(); }
 function $bind(o,m) { if( m == null ) return null; if( m.__id__ == null ) m.__id__ = $global.$haxeUID++; var f; if( o.hx__closures__ == null ) o.hx__closures__ = {}; else f = o.hx__closures__[m.__id__]; if( f == null ) { f = m.bind(o); o.hx__closures__[m.__id__] = f; } return f; }
 $global.$haxeUID |= 0;
 if(typeof(performance) != "undefined" ? typeof(performance.now) == "function" : false) {
@@ -11894,6 +23834,17 @@ var Enum = { };
 js_Boot.__toStr = ({ }).toString;
 LorelineServer.server = new loreline_lsp_Server();
 LorelineServer.nextRequestId = 1;
+Xml.Element = 0;
+Xml.PCData = 1;
+Xml.CData = 2;
+Xml.Document = 6;
+loreline_CodeToHscriptStackType.ObjectBrace = 0;
+loreline_CodeToHscriptStackType.ArrayBracket = 1;
+loreline_CodeToHscriptStackType.Brace = 2;
+loreline_CodeToHscriptStackType.Indent = 3;
+loreline_CodeToHscriptStackType.Bracket = 4;
+loreline_CodeToHscriptStackType.Paren = 5;
+loreline_CodeToHscript.CONTROL_KEYWORDS = ["for","while","if","else","switch","catch"];
 loreline_Int64Map.INITIAL_SIZE = 16;
 loreline_Int64Map.LOAD_FACTOR = 0.75;
 loreline_TokenStackType.ChoiceBrace = 0;
